@@ -4,6 +4,7 @@ import { KmaleonGateway } from '../src/adapters/kmaleon/kmaleon-gateway.js';
 import type { KmaleonResponseMapping } from '../src/contracts/kmaleon.contract.js';
 import { demoFixture } from '../src/demo/demo-fixture.js';
 import { WhatsAppClient, assertWhatsAppRecipientAllowed } from '../src/adapters/whatsapp/whatsapp-client.js';
+import { spawn } from 'node:child_process';
 
 const baseValues: Record<string, string> = {
   NODE_ENV: 'development',
@@ -87,5 +88,12 @@ await assert.rejects(
   () => demoWhatsApp.sendText('34663094036','probe'),
   (error: unknown) => error instanceof Error && error.message === 'DEMO_RECIPIENT_NOT_ALLOWED',
 );
+
+const demoStartDenied=await new Promise<{code:number|null;output:string}>((resolve,reject)=>{
+  const child=spawn(process.execPath,['--import','tsx','scripts/demo-start.ts'],{env:{...process.env,DEMO_DATA_ENABLED:'false'},stdio:['ignore','pipe','pipe']});
+  let output='';child.stdout.on('data',chunk=>{output+=chunk.toString();});child.stderr.on('data',chunk=>{output+=chunk.toString();});child.once('error',reject);child.once('exit',code=>resolve({code,output}));
+});
+assert.equal(demoStartDenied.code,1);
+assert.match(demoStartDenied.output,/DEMO_DATA_DISABLED/);
 
 console.log(JSON.stringify({ result: 'PASS', externalProviderCalls: 0, secretValuesPrinted: false }));

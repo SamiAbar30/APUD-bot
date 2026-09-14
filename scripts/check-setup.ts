@@ -22,7 +22,7 @@ try{
   }
   const configuration=readinessConfig(env);
   const report={at:new Date().toISOString(),runtime:process.version,environmentFile:selected,configuredKeys:keys.length,
-    result:checks.every(c=>c.passed)?'PASS':'FAIL',configuration,
+    result:checks.every(c=>c.passed)?'PASS':'FAIL',configuration,demoData:configuration.demoData,demoRecipientCount:configuration.demoRecipientCount,
     pendingProviderFields:keys.filter(key=>/^(?:WA_|KMALEON_|APUDATA_)/.test(key)&&!fileValues[key]),
     optionalProviderFields:keys.filter(key=>key==='CARMEN_USER_ID'&&!fileValues[key]),
     liveProviderValidation:'PENDING_ACCOUNTS_AND_REVIEW',externalProviderCalls:0,emailInteraction:'NONE',secretValuesPrinted:false,checks};
