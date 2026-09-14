@@ -12,6 +12,7 @@ const schema=z.object({
   OPERATOR_TOKEN:z.string().min(32),LOG_LEVEL:z.enum(['debug','info','warn','error']).default('info'),
   STORAGE_DIR:z.string().default('./storage').transform(v=>resolve(selectedEnv?dirname(resolve(selectedEnv)):process.cwd(),v)),MAX_DOCUMENT_BYTES:z.coerce.number().int().min(1024).max(30000000).default(15000000),
   OUTBOUND_ENABLED:bool,WORKERS_ENABLED:z.enum(['true','false']).default('true').transform(v=>v==='true'),
+  DEMO_DATA_ENABLED:bool,DEMO_WHATSAPP_RECIPIENTS:z.string().default('').transform(v=>v.split(',').map(phone=>phone.trim()).filter(Boolean)),
   AIRAM_FULL_NAME:optional,REPRESENTATIVES_FILE:optionalPath,TUTORIAL_FILE:optionalPath,CONSENT_VERSION:optional,CONSENT_TEXT_FILE:optionalPath,
   REVOCATION_GUIDE_FILE:optionalPath,REVOCATION_SCREENSHOTS_FILE:optionalPath,WA_TEMPLATE_CONFIG_FILE:optionalPath,
   WHATSAPP_ENABLED:bool,WA_ACCESS_TOKEN:optional,WA_PHONE_NUMBER_ID:optional,WA_BUSINESS_ACCOUNT_ID:optional,WA_APP_SECRET:optional,WA_VERIFY_TOKEN:optional,
@@ -29,6 +30,7 @@ const schema=z.object({
     if(e.WHATSAPP_ENABLED||e.KMALEON_ENABLED||e.APUDATA_ENABLED||e.SEDE_ENABLED)reject('MOCK_DATA_CANNOT_ENABLE_LIVE_CONNECTORS');
   }
   if(e.PORT===0&&e.NODE_ENV!=='test')reject('EPHEMERAL_PORT_REQUIRES_TEST');
+  if(e.DEMO_DATA_ENABLED){if(!e.DEMO_WHATSAPP_RECIPIENTS.length)reject('DEMO_WHATSAPP_RECIPIENTS_REQUIRED');for(const phone of e.DEMO_WHATSAPP_RECIPIENTS)if(!/^\d{5,20}$/.test(phone))reject('DEMO_WHATSAPP_RECIPIENT_INVALID');}
   const needs=(enabled:boolean,keys:(keyof typeof e)[])=>{if(enabled)for(const key of keys)if(!e[key])reject('MISSING_'+key);};
   needs(e.WHATSAPP_ENABLED,['WA_ACCESS_TOKEN','WA_PHONE_NUMBER_ID','WA_APP_SECRET','WA_VERIFY_TOKEN']);
   needs(e.KMALEON_ENABLED,['KMALEON_CONFIG_FILE','KMALEON_BASE_URL','KMALEON_CLIENT_ID','KMALEON_CLIENT_SECRET','KMALEON_AUTH_STATE','KMALEON_REDIRECT_URI']);
@@ -42,6 +44,7 @@ export function loadEnv(values:Record<string,string|undefined>=process.env):Env{
 export function readinessConfig(e:Env){return {
   serviceMode:e.SERVICE_MODE,dataMode:e.DATA_MODE,simulationEnabled:e.DATA_MODE==='mock',
   outboundEnabled:e.DATA_MODE==='mock'?false:e.OUTBOUND_ENABLED,
+  demoData:e.DEMO_DATA_ENABLED,demoRecipientCount:e.DEMO_WHATSAPP_RECIPIENTS.length,
   whatsapp:e.WHATSAPP_ENABLED&&Boolean(e.WA_ACCESS_TOKEN&&e.WA_PHONE_NUMBER_ID&&e.WA_APP_SECRET&&e.WA_VERIFY_TOKEN),
   kmaleon:e.KMALEON_ENABLED&&Boolean(e.KMALEON_CONFIG_FILE&&e.KMALEON_CLIENT_SECRET),
   apudata:e.APUDATA_ENABLED&&Boolean(e.APUDATA_CONFIG_FILE&&e.APUDATA_ACCESS_TOKEN),

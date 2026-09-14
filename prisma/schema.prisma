@@ -1,0 +1,144 @@
+generator client {
+  provider = "prisma-client-js"
+}
+datasource db {
+  provider = "postgresql"
+  url = env("DATABASE_URL")
+}
+enum ApodState {
+  INITIAL_TRIAGE
+  WAITING_CERT_RESPONSE
+  MOBILE_TRIAGE_PC_CHECK
+  MOBILE_EXPORT_GUIDE_SENT
+  MOBILE_ASSIST_CONSENT_REQUESTED
+  MOBILE_ASSIST_PROCESSING
+  PC_TUTORIAL_SENT
+  WAITING_PDF_SUBMISSION
+  AUDITING_DOCUMENT
+  PROVISIONAL_VIABILIZED
+  REVOCATION_GUIDE_SENT
+  WAITING_REVOCATION_REISSUE
+  CERT_ACQUISITION_LINKS_SENT
+  COURT_FALLBACK_GUIDE_SENT
+  APUDATA_PENDING_PREAPPROVAL
+  APUDATA_WAITING_PAYMENT
+  APUDATA_VIDEO_IN_PROGRESS
+  KMALEON_FILING
+  HANDOFF_CARMEN
+  COMPLETED
+  ESCALATED_HUMAN
+}
+model BotApodExpediente {
+  id String @id @default(uuid())
+  dni String @unique
+  nombre String
+  telefono String @unique
+  kmaleonExpedienteId String?
+  source String @default("OPERATOR")
+  identityVerified Boolean @default(false)
+  currentState ApodState @default(INITIAL_TRIAGE)
+  version Int @default(0)
+  hasDigitalCert Boolean?
+  certDevice String?
+  consentGranted Boolean @default(false)
+  consentVersion String?
+  consentGrantedAt DateTime?
+  auditStatus String?
+  pageCount Int?
+  isProvisionalFiled Boolean @default(false)
+  apudataOrderId String? @unique
+  apudataPreApproved Boolean @default(false)
+  apudataApprovalExpiresAt DateTime?
+  apudataApprovalEvidence Json?
+  documentId String?
+  documentApproved Boolean @default(false)
+  clientReviewed Boolean @default(false)
+  lastInboundAt DateTime?
+  direccion String?
+  codigoPostal String?
+  provincia String?
+  localidad String?
+  comunidadAutonoma String?
+  partidoJudicial String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  actions BotApodAccion[]
+  auditLogs BotApodAuditLog[]
+  documents BotApodDocumento[]
+  inbox BotApodInbox[]
+  @@index([kmaleonExpedienteId])
+  @@index([currentState, updatedAt])
+  @@map("bot_apod_expedientes")
+}
+model BotApodAccion {
+  id String @id @default(uuid())
+  expedienteId String
+  decisionId String @unique
+  expectedVersion Int
+  actionType String
+  status String @default("PENDING")
+  payload Json
+  idempotencyKey String @unique
+  retryCount Int @default(0)
+  maxRetries Int @default(3)
+  lastError String?
+  receipt Json?
+  executedAt DateTime?
+  startedAt DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  expediente BotApodExpediente @relation(fields:[expedienteId],references:[id])
+  @@index([status, createdAt])
+  @@map("bot_apod_acciones")
+}
+model BotApodDocumento {
+  id String @id @default(uuid())
+  expedienteId String
+  documentType String @default("PENDING_REVIEW")
+  s3OrLocalPath String
+  sha256Hash String
+  pageCount Int @default(0)
+  hasAiram Boolean @default(false)
+  hasPowersArt25 Boolean @default(false)
+  identityMatches Boolean @default(false)
+  rawAuditJson Json
+  uploadedKmaleon Boolean @default(false)
+  kmaleonDocumentId String?
+  approvedBy String?
+  approvedAt DateTime?
+  clientReviewedAt DateTime?
+  createdAt DateTime @default(now())
+  expediente BotApodExpediente @relation(fields:[expedienteId],references:[id])
+  @@unique([expedienteId,sha256Hash])
+  @@map("bot_apod_documentos")
+}
+model BotApodAuditLog {
+  id String @id @default(uuid())
+  expedienteId String
+  event String
+  fromState ApodState?
+  toState ApodState?
+  metadata Json?
+  operator String @default("SYSTEM_BOT")
+  createdAt DateTime @default(now())
+  expediente BotApodExpediente @relation(fields:[expedienteId],references:[id])
+  @@index([expedienteId,createdAt])
+  @@map("bot_apod_audit_logs")
+}
+model BotApodInbox {
+  id String @id @default(uuid())
+  externalId String @unique
+  expedienteId String?
+  telefono String?
+  source String
+  eventType String
+  payload Json
+  status String @default("PENDING")
+  notBefore DateTime @default(now())
+  lastError String?
+  createdAt DateTime @default(now())
+  processedAt DateTime?
+  expediente BotApodExpediente? @relation(fields:[expedienteId],references:[id])
+  @@index([status,notBefore])
+  @@map("bot_apod_inbox")
+}

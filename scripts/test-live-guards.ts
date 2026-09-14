@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { loadEnv } from '../src/config/env.js';
 import { KmaleonGateway } from '../src/adapters/kmaleon/kmaleon-gateway.js';
 import type { KmaleonResponseMapping } from '../src/contracts/kmaleon.contract.js';
+import { demoFixture } from '../src/demo/demo-fixture.js';
 
 const baseValues: Record<string, string> = {
   NODE_ENV: 'development',
@@ -66,5 +67,13 @@ await assert.rejects(
   (error: unknown) => error instanceof Error && error.message === 'KMALEON_RECIPIENT_NOT_CONFIGURED',
 );
 assert.deepEqual(clientCalls, []);
+
+assert.deepEqual(demoFixture('34663094035'), {
+  source: 'DEMO_FIXTURE',
+  dni: '12345678Z',
+  nombre: 'DEMO APOD CLIENT',
+  telefono: '34663094035',
+  kmaleonExpedienteId: 'demo-kmaleon-34663094035',
+});
 
 console.log(JSON.stringify({ result: 'PASS', externalProviderCalls: 0, secretValuesPrinted: false }));
