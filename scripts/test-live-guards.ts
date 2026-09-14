@@ -3,6 +3,7 @@ import { loadEnv } from '../src/config/env.js';
 import { KmaleonGateway } from '../src/adapters/kmaleon/kmaleon-gateway.js';
 import type { KmaleonResponseMapping } from '../src/contracts/kmaleon.contract.js';
 import { demoFixture } from '../src/demo/demo-fixture.js';
+import { WhatsAppClient, assertWhatsAppRecipientAllowed } from '../src/adapters/whatsapp/whatsapp-client.js';
 
 const baseValues: Record<string, string> = {
   NODE_ENV: 'development',
@@ -75,5 +76,16 @@ assert.deepEqual(demoFixture('34663094035'), {
   telefono: '34663094035',
   kmaleonExpedienteId: 'demo-kmaleon-34663094035',
 });
+
+assert.throws(
+  () => assertWhatsAppRecipientAllowed('34663094036', ['34663094035']),
+  (error: unknown) => error instanceof Error && error.message === 'DEMO_RECIPIENT_NOT_ALLOWED',
+);
+assert.doesNotThrow(() => assertWhatsAppRecipientAllowed('34663094035', ['34663094035']));
+const demoWhatsApp=new WhatsAppClient({accessToken:'test-access-token',phoneNumberId:'123456789',apiVersion:'v23.0',writesEnabled:true,allowedRecipients:['34663094035']});
+await assert.rejects(
+  () => demoWhatsApp.sendText('34663094036','probe'),
+  (error: unknown) => error instanceof Error && error.message === 'DEMO_RECIPIENT_NOT_ALLOWED',
+);
 
 console.log(JSON.stringify({ result: 'PASS', externalProviderCalls: 0, secretValuesPrinted: false }));
