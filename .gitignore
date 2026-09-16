@@ -13,7 +13,6 @@ evidence/*
 
 .runtime/
 .remember/
-/wce-emulator/
 
 # Operator-reviewed local mappings may later hold business-specific details.
 /config/*.json
