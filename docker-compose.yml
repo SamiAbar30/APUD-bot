@@ -1,0 +1,58 @@
+name: apod-bot
+services:
+  postgres:
+    image: postgres:16.15-bookworm
+    environment:
+      POSTGRES_USER: apod
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: apoderamientos
+    ports:
+      - '127.0.0.1:55432:5432'
+    volumes:
+      - apod_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U apod -d apoderamientos']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  redis:
+    image: redis:7.4-alpine
+    command: ['redis-server', '--appendonly', 'yes', '--maxmemory-policy', 'noeviction']
+    ports:
+      - '127.0.0.1:56379:6379'
+    volumes:
+      - apod_redis:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  app:
+    profiles: ['app']
+    build: .
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      DATABASE_URL: postgresql://apod:${POSTGRES_PASSWORD}@postgres:5432/apoderamientos?schema=public
+      REDIS_URL: redis://redis:6379
+      STORAGE_DIR: /app/storage
+    ports:
+      - '127.0.0.1:4720:4720'
+    volumes:
+      - apod_documents:/app/storage
+      - ./config:/app/config:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+volumes:
+  apod_postgres:
+  apod_redis:
+  apod_documents:

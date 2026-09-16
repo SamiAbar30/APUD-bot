@@ -1,0 +1,293 @@
+{
+  "reviewed": false,
+  "reviewEvidenceRef": "REPLACE_WITH_META_APPROVAL_EVIDENCE",
+  "templates": {
+    "ASK_HAS_CERT": {
+      "name": "replace_with_approved_first_contact",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "ASK_HAS_CERT:RETURNING": {
+      "name": "replace_with_approved_returning_contact",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:ENVIAR_LINKS_DNI": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:ENVIAR_LINKS_DNI": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:ENVIAR_LINKS_DNI": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:ENVIAR_AYUNTAMIENTO_NIE": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:ENVIAR_AYUNTAMIENTO_NIE": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:ENVIAR_AYUNTAMIENTO_NIE": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:ENVIAR_PDF_ORDENADOR": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:ENVIAR_PDF_ORDENADOR": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:ENVIAR_PDF_ORDENADOR": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:INSTALAR_EN_PC_DESDE_MOVIL": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:INSTALAR_EN_PC_DESDE_MOVIL": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:INSTALAR_EN_PC_DESDE_MOVIL": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:SOLICITUD_CERTIFICADO_PASSWORD": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:SOLICITUD_CERTIFICADO_PASSWORD": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:SOLICITUD_CERTIFICADO_PASSWORD": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:CONSULTAR_CERTIFICADO": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:CONSULTAR_CERTIFICADO": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:CONSULTAR_CERTIFICADO": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:CONSULTAR_DISPOSITIVO": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:CONSULTAR_DISPOSITIVO": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:CONSULTAR_DISPOSITIVO": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:MOBILE_TRIAGE_PC_CHECK": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:MOBILE_TRIAGE_PC_CHECK": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:MOBILE_TRIAGE_PC_CHECK": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:MOBILE_ASSIST_CONSENT_REQUESTED": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:MOBILE_ASSIST_CONSENT_REQUESTED": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:MOBILE_ASSIST_CONSENT_REQUESTED": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:FALLBACK_OPTIONS": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:FALLBACK_OPTIONS": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:FALLBACK_OPTIONS": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:COURT_FALLBACK_GUIDE_SENT": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:COURT_FALLBACK_GUIDE_SENT": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:COURT_FALLBACK_GUIDE_SENT": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:REVOCATION_GUIDE_SENT": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:REVOCATION_GUIDE_SENT": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:REVOCATION_GUIDE_SENT": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY3:WAITING_REVOCATION_REISSUE": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY7:WAITING_REVOCATION_REISSUE": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    },
+    "FOLLOWUP_DAY15:WAITING_REVOCATION_REISSUE": {
+      "name": "replace_with_approved_step_template",
+      "language": "es",
+      "parameterSources": [
+        "nombre"
+      ]
+    }
+  }
+}

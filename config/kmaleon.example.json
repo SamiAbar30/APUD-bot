@@ -1,0 +1,18 @@
+{
+  "reviewed": false,
+  "reviewEvidenceRef": "",
+  "mapping": {
+    "project": {"id": "", "dni": ""},
+    "projects": {
+      "items": "", "hasMore": "", "totalRows": "", "pageSize": 80,
+      "fields": {"id": "", "name": "", "dni": "", "phone": ""},
+      "filters": {
+        "dni": {"filterId": "", "field": "", "condition": "eq"},
+        "nombre": {"filterId": "", "field": "", "condition": "like"}
+      }
+    },
+    "projectAddress": {"projectId": "", "dni": "", "direccion": "", "codigoPostal": "", "provincia": "", "localidad": "", "comunidadAutonoma": ""},
+    "annotations": {"items": "", "hasMore": "", "fields": {"id": "", "projectId": "", "text": "", "recipientCode": "", "documentId": "", "pending": ""}, "pendingEncoding": "boolean"},
+    "document": {"base64": ""}
+  }
+}

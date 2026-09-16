@@ -1,0 +1,11 @@
+node_modules
+.git
+.env*
+storage
+evidence
+test/fixtures
+dist
+
+.runtime
+config/*.json
+!config/*.example.json

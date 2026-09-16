@@ -1,8 +1,18 @@
+# Current status — 16 September 2026
+
+Aviso 27 specification implemented; see [NEW_SPECIFICATION.md](NEW_SPECIFICATION.md). The existing local database migration is applied and all four case states, versions, consent flags, document links and approvals were preserved. Real-server browser checks passed for automation controls and human review. Live Kmaleon read-only scan and a real online-model response were verified. WCE runs locally with live CRM writes and polling disabled. Local model awaits user selection. New Macro 10 filing, live client delivery, partner/Sede completion and 95% autonomous success remain unverified.
+
+The following notes record earlier implementation stages and their verification at the time.
+
 # Estado — 14 de septiembre de 2026
 
 **Setup local y modo demo controlado implementados.** Node.js 22 y TypeScript exclusivamente. Las claves/cuentas permanecen en `.env`; el expediente demo se marca `DEMO_FIXTURE` y el teléfono permitido se configura por lista explícita. Se conservaron las claves locales existentes. El archivo se mantiene privado con permisos `600`, está excluido de Git y no se han impreso secretos.
 
 Se han aplicado patrones de configuración, aislamiento y simulación de [RECLAMACION y FACTURACION](REFERENCE_PATTERNS.md). Los proyectos de referencia se consultaron en solo lectura. APOD utiliza PostgreSQL y Redis propios y el panel local http://127.0.0.1:4720.
+
+La conversación incluye ahora un adaptador OpenAI-compatible con el patrón de GPT Luna de RECLAMACION-BOT. Está desactivado por defecto (`CONVERSATION_AI_PROVIDER=none`); al activarlo, la IA puede redactar respuestas de soporte en español y proponer una opción JSON permitida, mientras APOD conserva el control de la máquina de estados, las plantillas y la revisión humana. Si el proveedor no está configurado, el agente usa respuestas locales revisadas y nunca deja un mensaje libre sin contestación. El primer contacto usa el saludo de LITIGIOS basado en el ejemplo aportado y añade empresa y número de expediente cuando Kmaleon los proporciona.
+
+También se conectó el paquete externo `ai_agent_apoderamiento` mediante `APOD_AGENT_PACKAGE_DIR`. Se cargan sus secciones seguras de identidad/tono, el mapa de flujo y las métricas del corpus (`355` conversaciones, `4.745` pares SFT y `225` casos raros). Las instrucciones heredadas de contraseñas y pagos se filtran; la referencia queda subordinada a las plantillas y puertas de APOD. En WCE está cargado como referencia, mientras el proveedor de IA sigue `DISABLED` hasta que se configure expresamente.
 
 ## Comprobaciones de este setup
 

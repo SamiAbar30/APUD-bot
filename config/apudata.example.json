@@ -1,0 +1,13 @@
+{
+  "reviewed": false,
+  "reviewEvidenceRef": "",
+  "mapping": {
+    "preapprove": {"method": "POST", "path": "", "body": {"clientId": {"source": "clientId"}, "dni": {"source": "dni"}, "nombre": {"source": "nombre"}, "idempotencyKey": {"source": "idempotencyKey"}}},
+    "findOrder": {"method": "GET", "path": ""},
+    "createOrder": {"method": "POST", "path": "", "body": {"idempotencyKey": {"source": "idempotencyKey"}, "approvalId": {"source": "approvalId"}, "paymentEvidenceRef": {"source": "paymentEvidenceRef"}}},
+    "approvalFields": {"id": "", "clientId": "", "preApproved": "", "expiresAt": "", "evidenceRef": ""},
+    "foundOrderRoot": "",
+    "createdOrderRoot": "",
+    "orderFields": {"id": "", "clientId": "", "idempotencyKey": "", "approvalId": "", "amountCents": "", "currency": "", "status": "", "videoUrl": ""}
+  }
+}

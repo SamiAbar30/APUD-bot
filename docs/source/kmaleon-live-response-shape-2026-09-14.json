@@ -1,0 +1,23 @@
+{
+  "source": "read-only Kmaleon calls through the existing Reclamacion integration",
+  "date": "2026-09-14",
+  "externalWrites": 0,
+  "methods": {
+    "authentication": ["POST /api/server/autorize/", "POST /api/server/token/"],
+    "clientSearch": "cards/getCards",
+    "projectSearch": "projects/getProjects",
+    "projectRead": "projects/getProject"
+  },
+  "observedResponsePaths": {
+    "result": "data.result",
+    "pagination": "data.info.totalRows",
+    "cardIdentity": ["nifnormalizado", "nombrecompleto", "address[].telefonos", "categories[].participant_id"],
+    "projectIdentity": ["project_id", "codigo", "codigointerno", "intervinientes[].participant_id", "intervinientes[categoria.codigo=4].referencia.nombrecompleto"]
+  },
+  "observedFilters": {
+    "dni": {"filterId": "nif", "field": "nif", "condition": "eq", "fallback": {"filterId": "searchall", "field": "searchall", "condition": "ls"}},
+    "nombre": {"filterId": "nombre", "field": "nombre", "condition": "ls"},
+    "projectsByParticipant": {"filterId": "interviniente", "field": "interviniente", "condition": "eq"}
+  },
+  "privacy": "No client names, identity numbers, phone numbers, tokens, or raw provider responses are stored here."
+}

@@ -17,12 +17,14 @@ try{
   let created=false;
   if(existing){
     if(existing.source!==DEMO_FIXTURE_SOURCE||existing.dni!==fixture.dni||existing.nombre!==fixture.nombre||existing.telefono!==fixture.telefono||existing.kmaleonExpedienteId!==fixture.kmaleonExpedienteId)throw new Error('DEMO_FIXTURE_CONFLICT');
-    row=existing;
+    row=existing.empresa===fixture.empresa&&existing.numeroExpediente===fixture.numeroExpediente
+      ? existing
+      : await db.botApodExpediente.update({where:{id:existing.id},data:{empresa:fixture.empresa,numeroExpediente:fixture.numeroExpediente}});
   }else{
     created=true;
     row=await db.$transaction(async tx=>{
       const createdRow=await tx.botApodExpediente.create({data:{...fixture,identityVerified:true}});
-      await tx.botApodAuditLog.create({data:{expedienteId:createdRow.id,event:'DEMO_FIXTURE_SEEDED',operator:'DEMO_SETUP',metadata:{source:DEMO_FIXTURE_SOURCE,fixtureVersion:1}}});
+      await tx.botApodAuditLog.create({data:{expedienteId:createdRow.id,event:'DEMO_FIXTURE_SEEDED',operator:'DEMO_SETUP',metadata:{source:DEMO_FIXTURE_SOURCE,fixtureVersion:2}}});
       return createdRow;
     });
   }

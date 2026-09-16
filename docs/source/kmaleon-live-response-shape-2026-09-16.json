@@ -1,0 +1,45 @@
+{
+  "verifiedAt": "2026-09-16",
+  "method": "Read-only authenticated Kmaleon requests using configured adapter",
+  "externalWrites": 0,
+  "macro27": {
+    "catalogue": "-- A LA ESPERA DE APUD ACTA\r\n\r\nAVISADME CUANDO ESTE PORFA",
+    "rowsScanned": 442,
+    "pages": 6,
+    "pageSize": 80,
+    "exactPendingOpenTriggers": 13,
+    "acceptance": "Exact catalogue text, pending P option, verified open project, identity from linked active client card"
+  },
+  "macro10": {
+    "description": "DOCUMENTO 1 APUD ACTA",
+    "class": "APUD",
+    "classCode": 453,
+    "writeProtocol": "annotation.macro_codigo:10 on calendar/annotations/newAnnotation",
+    "proofRequired": "Catalogue prefix + unique APOD marker + APUD class453 + no pending macro processing comment + downloaded PDF SHA256"
+  },
+  "dayana": {
+    "name": "MORERA DE LA NUEZ, DAYANA",
+    "recipientCode": 13466,
+    "active": true,
+    "category": "USUARIO",
+    "categoryCode": 1,
+    "crossCheck": "Existing annotation recipient codigo13466 and user DMD"
+  },
+  "download": {
+    "shape": [
+      "file",
+      "mime",
+      "lastmodified",
+      "size",
+      "document"
+    ],
+    "bytes": 198559,
+    "independentDownloads": 2,
+    "sha256Matches": true
+  },
+  "limits": [
+    "No filing or notification write performed",
+    "No live WhatsApp send performed",
+    "No claim of complete production end-to-end validation"
+  ]
+}

@@ -36,7 +36,7 @@ const mapping: KmaleonResponseMapping = {
   projectIdentity: () => ({ projectId: '123', dni: '12345678Z' }),
   projectSearchFilter: () => ({}),
   projectSearchPage: () => ({ items: [], hasMore: false }),
-  projectCandidate: () => ({ projectId: '123', dni: '12345678Z', nombre: 'Demo', telefono: '34663094035' }),
+  projectCandidate: () => ({ projectId: '123', numeroExpediente: '123', empresa: 'Demo Empresa', dni: '12345678Z', nombre: 'Demo', telefono: '34663094035' }),
   annotationsPage: () => ({ items: [], hasMore: false }),
   documentBytes: () => Buffer.from('%PDF-'),
 };
@@ -52,7 +52,7 @@ assert.equal(env.CARMEN_USER_ID, undefined);
 
 const gatewayWithoutRecipient = new KmaleonGateway(client, { mapping });
 await assert.rejects(
-  () => gatewayWithoutRecipient.notifyCarmen({
+  () => gatewayWithoutRecipient.notifyDayana({
     projectId: '123',
     expectedDni: '12345678Z',
     idempotencyKey: 'notice-1',
@@ -75,6 +75,8 @@ assert.deepEqual(demoFixture('34663094035'), {
   dni: '12345678Z',
   nombre: 'DEMO APOD CLIENT',
   telefono: '34663094035',
+  empresa: 'MYKREDIT',
+  numeroExpediente: '24531',
   kmaleonExpedienteId: 'demo-kmaleon-34663094035',
 });
 

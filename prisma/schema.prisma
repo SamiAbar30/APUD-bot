@@ -19,12 +19,13 @@ enum ApodState {
   REVOCATION_GUIDE_SENT
   WAITING_REVOCATION_REISSUE
   CERT_ACQUISITION_LINKS_SENT
+  FALLBACK_OPTIONS
   COURT_FALLBACK_GUIDE_SENT
   APUDATA_PENDING_PREAPPROVAL
   APUDATA_WAITING_PAYMENT
   APUDATA_VIDEO_IN_PROGRESS
   KMALEON_FILING
-  HANDOFF_CARMEN
+  HANDOFF_DAYANA
   COMPLETED
   ESCALATED_HUMAN
 }
@@ -34,6 +35,10 @@ model BotApodExpediente {
   nombre String
   telefono String @unique
   kmaleonExpedienteId String?
+  /** Company/lender linked to the selected Kmaleon expediente. */
+  empresa String?
+  /** Business-facing expediente number shown to operators. */
+  numeroExpediente String?
   source String @default("OPERATOR")
   identityVerified Boolean @default(false)
   currentState ApodState @default(INITIAL_TRIAGE)
@@ -54,6 +59,21 @@ model BotApodExpediente {
   documentApproved Boolean @default(false)
   clientReviewed Boolean @default(false)
   lastInboundAt DateTime?
+  stepReached String @default("INITIAL_TRIAGE")
+  stepEnteredAt DateTime @default(now())
+  previousState String?
+  lastOutboundAt DateTime?
+  reminderAnchorAt DateTime?
+  reminderCycle Int @default(0)
+  reminderCount Int @default(0)
+  lastReminderDay Int @default(0)
+  nextReminderAt DateTime?
+  automationPaused Boolean @default(false)
+  optOutAt DateTime?
+  priorConversation Boolean @default(false)
+  messages BotApodMessage[]
+  humanTasks BotApodHumanTask[]
+  triggers BotApodTrigger[]
   direccion String?
   codigoPostal String?
   provincia String?
@@ -141,4 +161,48 @@ model BotApodInbox {
   expediente BotApodExpediente? @relation(fields:[expedienteId],references:[id])
   @@index([status,notBefore])
   @@map("bot_apod_inbox")
+}
+
+model BotApodMessage {
+  id String @id @default(uuid())
+  expedienteId String
+  externalId String @unique
+  role String
+  content String
+  source String
+  createdAt DateTime @default(now())
+  expediente BotApodExpediente @relation(fields:[expedienteId],references:[id])
+  @@index([expedienteId,createdAt])
+  @@map("bot_apod_messages")
+}
+model BotApodHumanTask {
+  id String @id @default(uuid())
+  expedienteId String
+  dedupeKey String @unique
+  kind String
+  status String @default("OPEN")
+  assignedTo String @default("DAYANA")
+  reason String
+  evidence Json?
+  createdAt DateTime @default(now())
+  resolvedAt DateTime?
+  resolvedBy String?
+  resolutionRef String?
+  expediente BotApodExpediente @relation(fields:[expedienteId],references:[id])
+  @@index([status,createdAt])
+  @@map("bot_apod_human_tasks")
+}
+model BotApodTrigger {
+  id String @id @default(uuid())
+  externalId String @unique
+  projectId String
+  expedienteId String?
+  status String @default("PENDING")
+  evidenceRef String
+  lastError String?
+  createdAt DateTime @default(now())
+  processedAt DateTime?
+  expediente BotApodExpediente? @relation(fields:[expedienteId],references:[id])
+  @@index([status,createdAt])
+  @@map("bot_apod_triggers")
 }

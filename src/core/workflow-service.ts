@@ -1,0 +1,254 @@
+import { Prisma, type PrismaClient, ApodState, type BotApodExpediente } from '@prisma/client';
+import type Redlock from 'redlock';
+import { randomUUID } from 'node:crypto';
+import { evaluateNextStep } from './decision-engine.js';
+import type { Expediente } from '../domain/models/expediente.js';
+import { EventType, type WorkflowEvent } from '../domain/fsm/states.js';
+import { PdfAuditor } from './pdf-auditor.js';
+import { AppError } from '../infrastructure/security.js';
+import type { DocumentStorage } from '../infrastructure/storage.js';
+import type { Env } from '../config/env.js';
+import { E } from './workflow-events.js';
+import type { KmaleonExpedienteCandidate } from '../contracts/kmaleon.contract.js';
+import { FOLLOW_UP_STATES, stepFor } from './follow-up.js';
+import type { StrictConversationAgent } from './conversation-agent.js';
+import { requiresDeterministicHandoff } from './conversation-policy.js';
+
+export const json = (value:unknown):Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
+export type WorkflowPatch = Prisma.BotApodExpedienteUpdateManyMutationInput;
+export class WorkflowService {
+  conversationAgent?:StrictConversationAgent;
+  constructor(readonly db:PrismaClient,readonly redlock:Redlock,readonly storage:DocumentStorage,readonly env:Env) {}
+  async locked<T>(id:string,fn:(signal:{aborted:boolean})=>Promise<T>):Promise<T>{return this.redlock.using([`lock:apod:${id}`],180000,fn);}
+  async load(id:string):Promise<BotApodExpediente>{const c=await this.db.botApodExpediente.findUnique({where:{id}});if(!c)throw new AppError('CASE_NOT_FOUND',404);return c;}
+  async linkKmaleon(candidate:KmaleonExpedienteCandidate,input:{source:'OPERATOR'|'AVISO_27';triggerId?:string}){
+    return this.locked(`identity:${candidate.dni}`,async signal=>{
+      if(signal.aborted)throw new AppError('LOCK_LOST');
+      return this.db.$transaction(async tx=>{
+        let row=await tx.botApodExpediente.findFirst({where:{kmaleonExpedienteId:candidate.projectId}});
+        const created=!row;
+        if(row){
+          if(row.dni!==candidate.dni||row.telefono!==candidate.telefono)throw new AppError('KMALEON_LOCAL_IDENTITY_MISMATCH',409);
+          row=await tx.botApodExpediente.update({where:{id:row.id},data:{empresa:candidate.empresa,numeroExpediente:candidate.numeroExpediente}});
+        }else{
+          if(await tx.botApodExpediente.findFirst({where:{OR:[{dni:candidate.dni},{telefono:candidate.telefono}]}}))throw new AppError('KMALEON_IDENTITY_ALREADY_LINKED',409);
+          row=await tx.botApodExpediente.create({data:{nombre:candidate.nombre,dni:candidate.dni,telefono:candidate.telefono,kmaleonExpedienteId:candidate.projectId,empresa:candidate.empresa,numeroExpediente:candidate.numeroExpediente,identityVerified:true,source:input.source}});
+        }
+        let initialContactQueued=false;
+        if(row.currentState==='INITIAL_TRIAGE'&&!row.automationPaused&&!row.optOutAt&&!await tx.botApodAuditLog.findFirst({where:{expedienteId:row.id,event:E.start}})){
+          await this.transition(tx,row,E.start,{source:input.source,projectId:candidate.projectId});initialContactQueued=true;
+        }
+        await tx.botApodAuditLog.create({data:{expedienteId:row.id,event:input.source==='AVISO_27'?'AVISO_27_OBSERVED':'KMALEON_EXPEDIENTE_SELECTED',operator:input.source,metadata:json({projectId:candidate.projectId,triggerId:input.triggerId,created})}});
+        if(input.triggerId)await tx.botApodTrigger.update({where:{id:input.triggerId},data:{expedienteId:row.id,status:'PROCESSED',processedAt:new Date(),lastError:null}});
+        return {...await tx.botApodExpediente.findUniqueOrThrow({where:{id:row.id}}),alreadyLinked:!created,initialContactQueued};
+      });
+    });
+  }
+  async transition(tx:Prisma.TransactionClient,c:BotApodExpediente,type:string,payload:Record<string,unknown>={},patch:WorkflowPatch={},operator='SYSTEM_BOT') {
+    if(!Object.values(EventType).includes(type as EventType))throw new AppError('UNSUPPORTED_DOMAIN_EVENT',400);
+    const document=c.documentId?await tx.botApodDocumento.findUnique({where:{id:c.documentId}}):null;
+    if(type===E.delivered){
+      if(!document||document.documentType!=='APODERAMIENTO_FINAL'||!document.uploadedKmaleon)throw new AppError('VERIFIED_FINAL_DOCUMENT_REQUIRED');
+      const notice=await tx.botApodAccion.findFirst({where:{expedienteId:c.id,actionType:'NOTIFY_DAYANA',status:'EXECUTED',receipt:{path:['documentSha256'],equals:document.sha256Hash}},orderBy:{createdAt:'desc'}});
+      if(!notice||(notice.receipt as Record<string,unknown>|null)?.verified!==true||payload.template!=='COMPLETION_NOTICE')throw new AppError('VERIFIED_DAYANA_NOTICE_REQUIRED');
+    }
+    const snapshot={...c,...patch,documentSha256:document?.sha256Hash??null,documentType:document?.documentType??null,kmaleonDocumentId:document?.kmaleonDocumentId??null} as unknown as Expediente;
+    const decision=evaluateNextStep(snapshot,{type:type as EventType,payload} as WorkflowEvent);
+    const enginePatch=decision.actionPayload.expedientePatch;
+    const persisted:Record<string,unknown>={};
+    const allowed=new Set(['hasDigitalCert','certDevice','consentGranted','consentVersion','consentGrantedAt','auditStatus','pageCount','isProvisionalFiled','apudataOrderId','apudataPreApproved','apudataApprovalExpiresAt','apudataApprovalEvidence','documentId','documentApproved','clientReviewed','partidoJudicial']);
+    if(enginePatch&&typeof enginePatch==='object'&&!Array.isArray(enginePatch))for(const [key,value]of Object.entries(enginePatch)){if(allowed.has(key))persisted[key]=value;}
+    if(persisted.apudataApprovalEvidence===null)persisted.apudataApprovalEvidence=Prisma.DbNull;
+    const combined:WorkflowPatch={...patch,...persisted};
+    if(decision.nextStep!==c.currentState||(decision.nextStep!==ApodState.ESCALATED_HUMAN&&stepFor({...c,...persisted,currentState:decision.nextStep as ApodState})!==c.stepReached)){
+      if(decision.nextStep===ApodState.ESCALATED_HUMAN){combined.previousState=c.currentState;combined.automationPaused=true;combined.nextReminderAt=null;}
+      else {
+        combined.stepReached=stepFor({...c,...persisted,currentState:decision.nextStep as ApodState});combined.stepEnteredAt=new Date();
+        combined.reminderCycle={increment:1};combined.reminderAnchorAt=null;combined.lastReminderDay=0;combined.reminderCount=0;combined.nextReminderAt=null;
+      }
+    }
+    if(type===EventType.CLIENT_CERT_FILE_RECEIVED){combined.stepReached='ASISTENCIA_SEGURA';combined.nextReminderAt=null;combined.reminderCycle={increment:1};}
+    if(type===EventType.CLIENT_OPT_OUT){combined.optOutAt=new Date();combined.automationPaused=true;combined.nextReminderAt=null;}
+    const changed=decision.nextStep!==c.currentState||decision.actionRequired!=='NO_OP'||Object.entries(combined).some(([key,value])=>JSON.stringify(value)!==JSON.stringify(c[key as keyof BotApodExpediente]));
+    const nextVersion=c.version+(changed?1:0);
+    const updated=await tx.botApodExpediente.updateMany({where:{id:c.id,version:c.version},data:{...combined,currentState:decision.nextStep as ApodState,version:nextVersion}});
+    if(updated.count!==1)throw new AppError('CASE_CHANGED_RELOAD',409);
+      await tx.botApodAuditLog.create({data:{expedienteId:c.id,event:type,fromState:c.currentState,toState:decision.nextStep as ApodState,operator,metadata:json({decision,version:nextVersion,evidence:Object.fromEntries(Object.entries(payload).filter(([key])=>['evidenceRef','clientEvidenceRef','paymentEvidenceRef','operatorId','requestActionId','contextId','messageId','messageSha256','conversationOption','conversationConfidence','conversationClassification','conversationReviewReason','conversationResponseId','conversationRolloutPhase','conversationRolloutKind','responseId','rolloutPhase','rolloutKind','sha256','documentId','reviewedDraftId','reviewedDraftSha256'].includes(key)))})}});
+    if(decision.actionRequired!=='NO_OP')await tx.botApodAccion.create({data:{expedienteId:c.id,decisionId:decision.decisionId,expectedVersion:nextVersion,actionType:decision.actionRequired,payload:json({...decision.actionPayload,contextStep:combined.stepReached??c.stepReached,...(payload.requiresHumanReview===true?{humanHandoff:true,handoffReason:payload.handoffReason??'HUMANO'}:{})}),idempotencyKey:`apod-${decision.decisionId}`,status:decision.actionRequired==='ESCALATE_HUMAN'?'HUMAN_REQUIRED':'PENDING'}});
+    if(decision.actionPayload.kind==='ESCALATE_HUMAN'&&type!==EventType.CLIENT_OPT_OUT&&!c.optOutAt&&decision.actionPayload.clientNoticeTemplate)await tx.botApodAccion.create({data:{expedienteId:c.id,decisionId:randomUUID(),expectedVersion:nextVersion,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({template:payload.requiresHumanReview===true?'CONVERSATION_REPLY':'HUMAN_HANDOFF_NOTICE',...(payload.requiresHumanReview===true?{variables:{replyText:payload.responseText},contextStep:c.stepReached}:{}),parentDecisionId:decision.decisionId,humanHandoff:true,handoffReason:payload.handoffReason??'HUMANO'}),idempotencyKey:`handoff-${decision.decisionId}`}});
+    if(type===EventType.OPERATOR_SUBMISSION_CONFIRMED)await tx.botApodHumanTask.updateMany({where:{expedienteId:c.id,kind:'ASSISTED_PROCESSING',status:'OPEN'},data:{status:'RESOLVED',resolvedAt:new Date(),resolvedBy:operator,resolutionRef:String(payload.evidenceRef)}});
+    if(decision.actionRequired==='ESCALATE_HUMAN'||type===E.pdf||type===EventType.CLIENT_CERT_FILE_RECEIVED||payload.requiresHumanReview===true){
+      const kind=type===E.pdf?'DOCUMENT_REVIEW':type===EventType.CLIENT_CERT_FILE_RECEIVED?'ASSISTED_PROCESSING':'CONVERSATION_REVIEW';
+      const ref=String(payload.documentId??payload.certRef??payload.messageId??decision.decisionId);
+      await tx.botApodHumanTask.upsert({where:{dedupeKey:`${kind}:${c.id}:${ref}`},create:{expedienteId:c.id,dedupeKey:`${kind}:${c.id}:${ref}`,kind,assignedTo:'DAYANA',reason:kind==='DOCUMENT_REVIEW'?'Revisar identidad, profesionales, facultades y validez del PDF.':kind==='ASSISTED_PROCESSING'?'Certificado recibido en sesión segura. El apoderamiento sigue pendiente.':String(payload.handoffReason??'El cliente necesita atención profesional.'),evidence:json({stepReached:c.stepReached,event:type,ref,...(payload.handoffMarker?{handoffMarker:payload.handoffMarker}:{})})},update:{}});
+    }
+    return {decision,version:nextVersion};
+  }
+  async event(id:string,version:number,type:string,payload:Record<string,unknown>={},patch:WorkflowPatch={},operator='OPERATOR') {
+    return this.locked(id,async signal=>{if(signal.aborted)throw new AppError('LOCK_LOST');const c=await this.load(id);if(c.version!==version)throw new AppError('CASE_CHANGED_RELOAD');return this.db.$transaction(tx=>this.transition(tx,c,type,payload,patch,operator));});
+  }
+  async intakeDocument(id:string,version:number,buffer:Buffer,sourceId?:string) {
+    return this.locked(id,async signal=>{
+      const c=await this.load(id);if(c.version!==version)throw new AppError('CASE_CHANGED_RELOAD');if(!c.identityVerified)throw new AppError('IDENTITY_NOT_VERIFIED');
+      const stored=await this.storage.save(buffer);if(signal.aborted)throw new AppError('LOCK_LOST');
+      const existing=await this.db.botApodDocumento.findUnique({where:{expedienteId_sha256Hash:{expedienteId:id,sha256Hash:stored.sha256}}});
+      const canReselectSameDocument=([ApodState.INITIAL_TRIAGE,ApodState.WAITING_PDF_SUBMISSION,ApodState.WAITING_REVOCATION_REISSUE] as ApodState[]).includes(c.currentState);
+      if(existing&&c.documentId===existing.id&&!canReselectSameDocument)return existing;
+      // A new workflow action has a new provider idempotency key. Previously filed
+      // bytes need reconciliation, never another automatic upload after recovery.
+      if(existing?.uploadedKmaleon)throw new AppError('DOCUMENT_ALREADY_FILED_REQUIRES_RECONCILIATION');
+      return this.db.$transaction(async tx=>{
+        const pendingAudit=json({status:'PENDING',sourceId,requestId:randomUUID()});
+        const doc=existing?await tx.botApodDocumento.update({where:{id:existing.id},data:{rawAuditJson:pendingAudit,pageCount:0,hasAiram:false,hasPowersArt25:false,identityMatches:false,documentType:'PENDING_REVIEW',approvedAt:null,approvedBy:null,clientReviewedAt:null}}):await tx.botApodDocumento.create({data:{expedienteId:id,s3OrLocalPath:stored.path,sha256Hash:stored.sha256,rawAuditJson:pendingAudit}});
+        if(existing)await tx.botApodAuditLog.create({data:{expedienteId:id,event:'DOCUMENT_RESELECTED_FOR_REVIEW',metadata:json({documentId:doc.id,sha256:stored.sha256,previousAuditStatus:(existing.rawAuditJson as Record<string,unknown>|null)?.status,sourceId})}});
+        const result=await this.transition(tx,c,E.pdf,{documentId:doc.id,sha256:stored.sha256},{documentId:doc.id,documentApproved:false,clientReviewed:false,auditStatus:null,pageCount:null});
+        if(result.decision.nextStep!==ApodState.AUDITING_DOCUMENT)return tx.botApodDocumento.update({where:{id:doc.id},data:{rawAuditJson:json({status:'HUMAN_REQUIRED',reason:'DOCUMENT_AWAITS_CASE_RECOVERY',sourceId})}});
+        return doc;
+      });
+    });
+  }
+  async auditDocument(documentId:string,requestId?:string) {
+    const initial=await this.db.botApodDocumento.findUniqueOrThrow({where:{id:documentId}});
+    return this.locked(initial.expedienteId,async signal=>{
+      const doc=await this.db.botApodDocumento.findUniqueOrThrow({where:{id:documentId}});
+      const pendingAudit=doc.rawAuditJson as Record<string,unknown>|null;
+      if(pendingAudit?.status!=='PENDING'||pendingAudit.requestId!==requestId)return;
+      const c=await this.load(doc.expedienteId);if(signal.aborted)throw new AppError('LOCK_LOST');
+      if(c.documentId!==doc.id||c.currentState!==ApodState.AUDITING_DOCUMENT){
+        const status=c.documentId!==doc.id?'SUPERSEDED':'HUMAN_REQUIRED';
+        await this.db.botApodDocumento.updateMany({where:{id:doc.id,rawAuditJson:{path:['status'],equals:'PENDING'}},data:{rawAuditJson:json({...pendingAudit,status,reason:status==='SUPERSEDED'?'ANOTHER_DOCUMENT_SELECTED':'DOCUMENT_AWAITS_CASE_RECOVERY'})}});
+        return;
+      }
+      const buffer=await this.storage.read(doc.s3OrLocalPath,doc.sha256Hash);
+      let report:Awaited<ReturnType<typeof PdfAuditor.audit>>;
+      try{report=await PdfAuditor.audit(buffer,{expectedDni:c.dni,airamFullName:this.env.AIRAM_FULL_NAME});}finally{buffer.fill(0);}
+      if(signal.aborted)throw new AppError('LOCK_LOST');
+      // Never persist extracted document text. The private PDF remains the evidence.
+      const {extractedText: _text,...safeReport}=report;
+      return this.db.$transaction(async tx=>{
+        await tx.botApodDocumento.update({where:{id:doc.id},data:{pageCount:report.pageCount,hasAiram:report.hasAiram,hasPowersArt25:report.missingPowers.length===0,identityMatches:report.identityMatches,rawAuditJson:json({...safeReport,requestId})}});
+        await this.transition(tx,c,E.audit,{...safeReport,documentId:doc.id,sha256:doc.sha256Hash},{auditStatus:report.status,pageCount:report.pageCount});
+      });
+    });
+  }
+  async approve(id:string,documentId:string,input:{version:number;sha256:string;reviewer:string;evidenceRef:string;clientReviewed:boolean;clientEvidenceRef?:string}) {
+    return this.locked(id,async signal=>{
+      const c=await this.load(id);if(c.version!==input.version||c.documentId!==documentId)throw new AppError('CASE_CHANGED_RELOAD');
+      const doc=await this.db.botApodDocumento.findUniqueOrThrow({where:{id:documentId}});
+      if(doc.expedienteId!==id||doc.sha256Hash!==input.sha256)throw new AppError('DOCUMENT_MISMATCH');
+      if(c.currentState!==ApodState.AUDITING_DOCUMENT||doc.uploadedKmaleon)throw new AppError('DOCUMENT_NOT_AWAITING_REVIEW');
+      if(!doc.identityMatches||!doc.hasAiram||!doc.pageCount)throw new AppError('AUDIT_REQUIRES_CORRECTION');
+      const report=doc.rawAuditJson as Record<string,unknown>;
+      if(report.isValid!==true&&report.canViabilize!==true)throw new AppError('DOCUMENT_NOT_ELIGIBLE');
+      if(!input.clientReviewed||!input.clientEvidenceRef)throw new AppError('CLIENT_REVIEW_EVIDENCE_REQUIRED');
+      const verifiedBytes=await this.storage.read(doc.s3OrLocalPath,doc.sha256Hash);verifiedBytes.fill(0);if(signal.aborted)throw new AppError('LOCK_LOST');
+      return this.db.$transaction(async tx=>{
+        await tx.botApodDocumento.update({where:{id:documentId},data:{approvedAt:new Date(),approvedBy:input.reviewer,clientReviewedAt:input.clientReviewed?new Date():null,documentType:report.isValid?'APODERAMIENTO_FINAL':'APODERAMIENTO_PROVISIONAL'}});
+        await tx.botApodHumanTask.updateMany({where:{expedienteId:id,dedupeKey:`DOCUMENT_REVIEW:${id}:${documentId}`,status:'OPEN'},data:{status:'RESOLVED',resolvedAt:new Date(),resolvedBy:input.reviewer,resolutionRef:input.evidenceRef}});
+        return this.transition(tx,c,E.approve,{documentId,sha256:input.sha256,reviewer:input.reviewer,evidenceRef:input.evidenceRef,clientEvidenceRef:input.clientEvidenceRef},{documentApproved:true,clientReviewed:input.clientReviewed},input.reviewer);
+      });
+    });
+  }
+  async recoverCase(id:string,version:number,reason:string){
+    return this.locked(id,async signal=>{const c=await this.load(id);if(c.version!==version||signal.aborted)throw new AppError('CASE_CHANGED_RELOAD');
+      if(c.currentState!==ApodState.ESCALATED_HUMAN)throw new AppError('CASE_NOT_ESCALATED');
+      if(c.optOutAt)throw new AppError('CLIENT_OPT_OUT_REQUIRES_NEW_CONSENT');
+      const target=c.previousState;
+      if(!target||target===ApodState.INITIAL_TRIAGE||!Object.values(ApodState).includes(target as ApodState))throw new AppError('SAVED_STEP_REQUIRES_OPERATOR_REVIEW');
+      return this.db.$transaction(async tx=>{
+        const result=await this.transition(tx,c,E.resume,{operatorId:'OPERATOR',targetState:target,reason},{automationPaused:false},'OPERATOR');
+        if(result.decision.nextStep===ApodState.ESCALATED_HUMAN)throw new AppError('SAVED_STEP_REQUIRES_OPERATOR_REVIEW');
+        await tx.botApodAccion.updateMany({where:{expedienteId:id,status:{in:['PENDING','BLOCKED','HUMAN_REQUIRED']}},data:{status:'CANCELLED',lastError:'OPERATOR_RESUMED_SAVED_STEP'}});
+        await tx.botApodExpediente.update({where:{id},data:{stepReached:c.stepReached,reminderAnchorAt:new Date(),nextReminderAt:FOLLOW_UP_STATES.has(target as ApodState)?new Date(Date.now()+3*86400000):null}});
+        return {id,version:result.version,resumedState:result.decision.nextStep};
+      });});
+  }
+
+  async processInbox(id:string,handleMedia:(caseId:string,mediaId:string,externalId:string)=>Promise<void>) {
+    return this.redlock.using([`lock:apod-inbox:${id}`],180000,async inboxSignal=>{
+
+    // Media processing takes its own lock. Durable per-message statuses make recovery explicit.
+    const pending=await this.db.botApodInbox.findMany({where:{expedienteId:id,status:'PENDING'},orderBy:[{createdAt:'asc'},{id:'asc'}],take:50});
+    if(!pending.length||pending.some(x=>x.notBefore.getTime()>Date.now()))return;
+    for(const candidate of pending){
+      if(inboxSignal.aborted)throw new AppError('INBOX_LOCK_LOST');
+      const row=await this.db.botApodInbox.findUniqueOrThrow({where:{id:candidate.id}});
+      if(row.status!=='PENDING')continue;
+      if(row.notBefore.getTime()>Date.now())return;
+      // Finish the previous reply before consuming another client turn. This
+      // prevents rapid messages from making an unsent tutorial/action stale.
+      if(await this.db.botApodAccion.count({where:{expedienteId:id,actionType:{in:['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA']},status:{in:['PENDING','RUNNING','UNCERTAIN']}}}))return;
+      if(row.eventType==='PDF_MEDIA'){
+        try{await handleMedia(id,(row.payload as Record<string,string>).mediaId!,row.externalId);await this.db.botApodInbox.updateMany({where:{id:row.id,status:'PENDING'},data:{status:'PROCESSED',processedAt:new Date()}});}catch{await this.db.botApodInbox.updateMany({where:{id:row.id,status:'PENDING'},data:{status:'HUMAN_REQUIRED',lastError:'PDF_PROCESSING_FAILED'}});}continue;
+      }
+      await this.locked(id,async signal=>{const fresh=await this.db.botApodInbox.findUniqueOrThrow({where:{id:row.id}});if(fresh.status!=='PENDING'||signal.aborted)return;const c=await this.load(id);
+        // One quiet-period burst is one conversation turn. Keep each durable inbox
+        // row and user message; commit all consumed statuses with the one decision.
+        const turnRows=[fresh];
+        if(fresh.eventType==='CONVERSATION_TEXT'&&!requiresDeterministicHandoff(String((fresh.payload as Record<string,unknown>).text??''))){
+          let size=String((fresh.payload as Record<string,unknown>).text??'').length;
+          const following=pending.slice(pending.findIndex(x=>x.id===row.id)+1);
+          for(const next of following){
+            const value=String((next.payload as Record<string,unknown>).text??'');
+            if(next.eventType!=='CONVERSATION_TEXT'||next.createdAt.getTime()-turnRows.at(-1)!.createdAt.getTime()>4000||size+1+value.length>4000||requiresDeterministicHandoff(value))break;
+            const current=await this.db.botApodInbox.findUniqueOrThrow({where:{id:next.id}});
+            if(current.status!=='PENDING'||current.notBefore.getTime()>Date.now())break;
+            turnRows.push(current);size+=1+value.length;
+          }
+        }
+        const turnIds=turnRows.map(x=>x.id);
+        let eventType=row.eventType;let eventPayload=row.payload as Record<string,unknown>;
+        if(eventType==='CONVERSATION_TEXT'){
+          if(!c.identityVerified){await this.db.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'IDENTITY_NOT_VERIFIED'}});return;}
+          if(c.automationPaused||c.optOutAt){
+            await this.db.$transaction(async tx=>{
+              await tx.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'AUTOMATION_PAUSED',processedAt:new Date()}});
+              if(!c.optOutAt)await tx.botApodHumanTask.upsert({where:{dedupeKey:`inbox:${row.id}`},create:{expedienteId:id,dedupeKey:`inbox:${row.id}`,kind:'CONVERSATION_REVIEW',reason:'Nuevo mensaje durante el traspaso al equipo.',evidence:json({inboxId:row.id,stepReached:c.stepReached})},update:{}});
+            });
+            return;
+          }
+          if(!this.conversationAgent)throw new AppError('CONVERSATION_AGENT_NOT_CONFIGURED');
+          const sourceMessage=await this.db.botApodMessage.findUnique({where:{externalId:row.externalId}});
+          const history=await this.db.botApodMessage.findMany({where:{expedienteId:id,externalId:{notIn:turnRows.map(x=>x.externalId)},OR:[{role:'assistant'},{createdAt:{lt:sourceMessage?.createdAt??row.createdAt}}]},orderBy:[{createdAt:'desc'},{id:'desc'}],take:12});
+          // Approved Meta templates store a marker instead of their body in history.
+          // An accepted opening receipt works for both transports, across all history.
+          const sentOpening=await this.db.botApodAccion.findFirst({where:{expedienteId:id,status:{in:['AWAITING_DELIVERY','EXECUTED']},receipt:{path:['template'],equals:'ASK_HAS_CERT'}},select:{id:true}});
+          const introduction=sentOpening??await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',OR:[{content:'Plantilla aprobada: ASK_HAS_CERT'},{AND:[{content:{contains:'LITIGIOS'}},{content:{contains:'apoderamiento apud acta'}}]}]},select:{id:true}});
+          const text=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')).join('\n');
+          const turn=await this.conversationAgent.turn(c,text,history.reverse().map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),Boolean(introduction));
+          if(signal.aborted)throw new AppError('LOCK_LOST');
+          const latest=await this.load(id);if(latest.optOutAt||latest.automationPaused)return;
+          eventType=turn.type;eventPayload={...eventPayload,...turn.payload};delete eventPayload.text;
+        }
+        if(eventType===E.help){
+          const evidence=row.payload as Record<string,unknown>;
+          await this.db.$transaction(async tx=>{
+            await tx.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'CLIENT_MESSAGE_REQUIRES_OPERATOR_REVIEW'}});
+            await tx.botApodHumanTask.upsert({where:{dedupeKey:`inbox:${row.id}`},create:{expedienteId:id,dedupeKey:`inbox:${row.id}`,kind:'CONVERSATION_REVIEW',reason:'Mensaje pendiente de atención profesional.',evidence:json({inboxId:row.id,stepReached:c.stepReached})},update:{}});
+            await tx.botApodAuditLog.create({data:{expedienteId:id,event:'CLIENT_MESSAGE_REQUIRES_OPERATOR_REVIEW',operator:'WHATSAPP_CLIENT',metadata:json({inboxId:row.id,externalId:row.externalId,messageId:typeof evidence.messageId==='string'?evidence.messageId:undefined,messageSha256:typeof evidence.messageSha256==='string'?evidence.messageSha256:undefined,conversationClassification:typeof evidence.conversationClassification==='string'?evidence.conversationClassification:undefined,conversationReviewReason:typeof evidence.conversationReviewReason==='string'?evidence.conversationReviewReason:undefined,source:row.source})}});
+          });
+          return;
+        }
+        if([E.consentYes,E.review].includes(row.eventType as typeof E.consentYes)){
+          const evidence=row.payload as Record<string,unknown>;
+          const requestAction=typeof evidence.requestActionId==='string'?await this.db.botApodAccion.findUnique({where:{id:evidence.requestActionId}}):null;
+          if(!requestAction||requestAction.expedienteId!==c.id||requestAction.expectedVersion!==c.version||requestAction.createdAt.getTime()<Date.now()-3600000){await this.db.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'STALE_CLIENT_CONSENT_OR_REVIEW'}});return;}
+        }
+        if(!c.identityVerified){await this.db.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'IDENTITY_NOT_VERIFIED'}});return;}
+        await this.db.$transaction(async tx=>{
+          await this.transition(tx,c,eventType,eventPayload,{},'WHATSAPP_CLIENT');
+          const payload=eventPayload;
+          const needsHumanReview=payload.requiresHumanReview===true;
+          await tx.botApodInbox.updateMany({where:{id:{in:turnIds},status:'PENDING'},data:{status:needsHumanReview?'HUMAN_REQUIRED':'PROCESSED',lastError:needsHumanReview?'CLIENT_MESSAGE_REQUIRES_OPERATOR_REVIEW':null,processedAt:new Date()}});
+        });
+      });
+    }
+    });
+  }
+  factPatch(type:string):WorkflowPatch {
+    if(type===E.certYes)return {hasDigitalCert:true};if(type===E.certNo)return {hasDigitalCert:false,certDevice:'NONE'};
+    if(type===E.deviceMobile)return {certDevice:'MOBILE',hasDigitalCert:true};if(type===E.devicePc)return {certDevice:'PC',hasDigitalCert:true};
+    if(type===E.consentNo)return {consentGranted:false,consentGrantedAt:null};
+    return {};
+  }
+}

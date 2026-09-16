@@ -1,0 +1,16 @@
+{
+  "reviewed": false,
+  "reviewEvidenceRef": "",
+  "recipe": {
+    "id": "",
+    "reviewEvidenceRef": "",
+    "reviewedDraftOnly": true,
+    "officialOrigins": [],
+    "startUrl": "",
+    "allowedRequests": [],
+    "steps": [],
+    "identitySelector": "",
+    "draftReadySelector": "",
+    "draftPdfLinkSelector": ""
+  }
+}
