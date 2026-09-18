@@ -1,4 +1,5 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
+import { BotActivityState } from "@/components/BotActivity";
 import { SocketProvider, useSocket } from "@/context/SocketProvider";
 import { ChatWindow } from "@/components/ChatWindow";
 import { DemoToolbar } from "@/components/DemoToolbar";
@@ -18,6 +19,15 @@ const Index = () => {
 const WhatsAppEmulator = () => {
   const { socket, isConnected } = useSocket();
   const { messages, setMessages, clearPersistence } = useChatPersistence();
+  const [activity, setActivity] = useState<BotActivityState>({ phase: 'offline' });
+
+  useEffect(() => {
+    if (!socket) return;
+    const failed = ({message}: {message: string}) => toast.error(message);
+    socket.on('bot_activity', setActivity);
+    socket.on('reply_error', failed);
+    return () => { socket.off('bot_activity', setActivity); socket.off('reply_error', failed); };
+  }, [socket]);
 
   useEffect(() => {
     if (!socket) return;
@@ -62,7 +72,8 @@ const WhatsAppEmulator = () => {
       data,
       timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, newMessage]);
+    // The bridge replays its recent outbox on reconnect. Keep each stable id once.
+    setMessages((prev) => direction === 'out' && prev.some(m => m.direction === 'out' && m.data.id === data.id) ? prev : [...prev, newMessage]);
   };
 
   const handleReply = (reply: UIReply) => {
@@ -135,7 +146,7 @@ const WhatsAppEmulator = () => {
     }
 
     // Send to bridge
-    if (socket) {
+    if (socket && isConnected) {
       socket.emit("ui_reply", reply);
     } else {
       toast.error("Not connected to bridge server");
@@ -169,7 +180,7 @@ const WhatsAppEmulator = () => {
 
         {/* Chat Window */}
         <div className="flex-1 overflow-hidden">
-          <ChatWindow messages={messages} onReply={handleReply} />
+          <ChatWindow messages={messages} onReply={handleReply} activity={isConnected ? activity : {phase:'offline'}} />
         </div>
 
         {/* Demo Toolbar */}

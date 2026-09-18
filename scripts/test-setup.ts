@@ -212,6 +212,20 @@ try{
   await http(`/api/cases/${paid.id}/payment-confirmation`,{...paymentBody,version:paidVersion,approvalId:approval.id},409);
   check('Duplicate payment cannot create another order',providers.orders.size===1&&providers.orderCalls===1);
 
+  const guided=await createCase(90);
+  await flow.event(guided.id,guided.version,'CLIENT_HAS_CERT_PC');
+  for(let i=0;i<3;i++){
+    const saved=await cget(guided.id);
+    // New service object each time: stored counters, not process memory, drive progression.
+    const restarted=new WorkflowService(db,flow.redlock,flow.storage,env);
+    await restarted.event(saved.id,saved.version,'CLIENT_EXPORT_FAILED');
+  }
+  const afterHelp=await cget(guided.id);
+  check('Guided attempts persist across service instances before any fallback',afterHelp.currentState==='PC_TUTORIAL_SENT'&&afterHelp.digitalHelpAttempts===3&&afterHelp.certificateHelpAttempts===1&&!afterHelp.automationPaused);
+  check('Saved reminder step follows certificate assistance',afterHelp.stepReached==='LOCALIZAR_COPIA_CERTIFICADO');
+  for(let i=0;i<3;i++){const saved=await cget(guided.id);await flow.event(saved.id,saved.version,'CLIENT_EXPORT_FAILED');}
+  check('Fallback appears only after repeated digital and certificate-copy attempts',(await cget(guided.id)).currentState==='FALLBACK_OPTIONS');
+
   const finalCases=await db.botApodExpediente.findMany({select:{id:true,nombre:true,currentState:true,version:true}});
   report.cases=finalCases;report.counts={cases:finalCases.length,documents:await db.botApodDocumento.count(),auditLogs:await db.botApodAuditLog.count(),inbox:await db.botApodInbox.count(),actions:await db.botApodAccion.count(),mockProviderUploads:providers.uploads.size,mockProviderNotices:providers.notices.size,mockProviderMessages:providers.messages.length,mockProviderOrders:providers.orders.size};
   report.result='PASS';report.retention='Isolated PostgreSQL schema and local generated PDFs retained for inspection. Redis queues removed only within this run prefix.';

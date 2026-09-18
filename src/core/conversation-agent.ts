@@ -1,6 +1,7 @@
 import type { BotApodExpediente } from '@prisma/client';
 import { EventType } from '../domain/fsm/states.js';
 import { firstContactText, pendingConversationText } from './messages.js';
+import { DIGITAL_GUIDANCE_STATES, conversationYield, declaredDocumentType, guidanceRequest, isConversationQuestion, reviewedConversationReply, type CaseContext } from './conversation-guidance.js';
 import {
   allowedConversationOptions,
   classifyClientText,
@@ -31,6 +32,7 @@ export interface ConversationModel {
     allowedOptions: readonly string[];
     text: string;
     history?: readonly ConversationHistoryMessage[];
+    helpProgress?: {digitalAttempts:number;certificateAttempts:number};
   }): Promise<unknown>;
   reply?(input: {
     phase: ConversationPhase;
@@ -39,6 +41,7 @@ export interface ConversationModel {
     hasDigitalCert: boolean | null;
     text: string;
     history?: readonly ConversationHistoryMessage[];
+    helpProgress?: {digitalAttempts:number;certificateAttempts:number};
   }): Promise<unknown>;
 }
 
@@ -67,19 +70,24 @@ export class StrictConversationAgent {
   }
 
   async classify(
-    expediente: Pick<BotApodExpediente, 'currentState' | 'hasDigitalCert'>,
+    expediente: CaseContext,
     text: string,
     history: readonly ConversationHistoryMessage[] = [],
   ): Promise<ConversationClassification> {
     const local = classifyClientText(expediente, text);
     const deviceEvidence=(choice:ConversationClassification):ConversationClassification=>{
-      if(choice.kind!=='OPTION'||!['DEVICE_PC','DEVICE_MOBILE'].includes(choice.optionId)||expediente.hasDigitalCert===true)return choice;
+      if(choice.kind!=='OPTION')return choice;
       const n=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+      if(['COURT_APPOINTMENT','APUDATA_REQUEST'].includes(choice.optionId)&&!/^(?:juzgado|via presencial|apudata|gestion de pago|servicio de pago)[.!\s]*$|\b(?:quiero|prefiero|elijo|voy a|i want|i prefer|i choose)\b.*(?:juzgado|presencial|court|empresa|company|pago|pagar|apudata)/.test(n))return {kind:'HUMAN_REVIEW',reason:'UNSUPPORTED_TEXT'};
+      if(!['DEVICE_PC','DEVICE_MOBILE'].includes(choice.optionId)||expediente.hasDigitalCert===true)return choice;
       // Owning a computer (including a relative's computer) is not proof of a certificate.
       if(!/\bsi\b|(?:tengo|dispongo|instalado|esta|esta instalado).{0,30}certificado|certificado.{0,40}(?:ordenador|pc|movil)|ya (?:lo )?tengo en/.test(n)||/\bno tengo\b/.test(n))return {kind:'HUMAN_REVIEW',reason:'UNSUPPORTED_TEXT'};
       return choice;
     };
     if (requiresDeterministicHandoff(text)) return local.kind === 'HUMAN_REVIEW' ? local : { kind: 'HUMAN_REVIEW', reason: 'UNSUPPORTED_TEXT' };
+    // A question about a route is not a request to take it, even if the model
+    // or a keyword matcher finds "pagar", "juzgado", or "certificado".
+    if (isConversationQuestion(text) || reviewedConversationReply(expediente, text)) return { kind: 'HUMAN_REVIEW', reason: 'UNSUPPORTED_TEXT' };
     if (local.kind === 'OPTION' || !this.model) return deviceEvidence(local);
     // Prompt-injection attempts and button-only confirmations are hard gates.
     // They must never be handed to a model that could reinterpret them as a
@@ -107,7 +115,7 @@ export class StrictConversationAgent {
    * replies keep the demo responsive while no provider is configured.
    */
   async respond(
-    expediente: Pick<BotApodExpediente, 'currentState' | 'hasDigitalCert'>,
+    expediente: CaseContext,
     text: string,
     history: readonly ConversationHistoryMessage[] = [],
   ): Promise<ConversationReply> {
@@ -116,6 +124,8 @@ export class StrictConversationAgent {
     if (requiresDeterministicHandoff(text) || (local.kind === 'HUMAN_REVIEW' && (local.reason === 'PROMPT_INJECTION' || local.reason === 'BUTTON_REQUIRED'))) {
       return { text: PROFESSIONAL_HANDOFF, requiresHumanReview: true };
     }
+    const reviewed = this.phase === 3 ? reviewedConversationReply(expediente, text) : null;
+    if (reviewed) return reviewed;
     if(local.kind==='HUMAN_REVIEW'&&local.reason==='AMBIGUOUS_TEXT'){
       const pending=pendingConversationText(expediente);
       if(pending)return {text:`Para orientarte necesito aclarar tu respuesta. ${pending}`,requiresHumanReview:false};
@@ -135,21 +145,41 @@ export class StrictConversationAgent {
           hasDigitalCert: expediente.hasDigitalCert,
           text,
           history: boundedConversationHistory(history),
+          helpProgress:{digitalAttempts:expediente.digitalHelpAttempts??0,certificateAttempts:expediente.certificateHelpAttempts??0},
         });
         const validated = validateModelReply(proposed);
-        if (validated) return validated;
+        if (validated) {
+          if(validated.requiresHumanReview&&DIGITAL_GUIDANCE_STATES.has(expediente.currentState)&&!/\b(?:abogado|gestor|humano|persona|plazo legal|prescripcion|demanda|falleci|tutor|menor)\b/i.test(text)){
+            return {text:pendingConversationText(expediente)??'Te ayudo a continuar. ¿En qué paso te has quedado?',requiresHumanReview:false};
+          }
+          // Only the FSM can offer alternatives after exhausting guided attempts.
+          if(DIGITAL_GUIDANCE_STATES.has(expediente.currentState)&&/juzgado|decanato|empresa colaboradora|proveedor de pago/i.test(validated.text)){
+            return {text:pendingConversationText(expediente)??'Vamos paso a paso con el apoderamiento. ¿En qué paso te has quedado?',requiresHumanReview:false};
+          }
+          return validated;
+        }
       } catch {
         // A provider failure falls through to the reviewed local reply.
       }
     }
 
-    return this.model?{text:'Ha surgido un problema al responder. Te paso con una persona del despacho para que te ayude.',requiresHumanReview:true,handoffReason:'HUMANO'}:localSupportReply(text);
+    const localReply=localSupportReply(text);
+    if(!localReply.requiresHumanReview||/hablar con|humano|gestor|profesional/i.test(text))return localReply;
+    const pending=pendingConversationText(expediente);
+    return pending?{text:`Puedo ayudarte con el apoderamiento. ${pending}`,requiresHumanReview:false}:localReply;
   }
 
   /** Shared by the durable webhook worker and the real-provider evaluator. */
-  async turn(expediente:Pick<BotApodExpediente,'currentState'|'hasDigitalCert'>,text:string,history:readonly ConversationHistoryMessage[]=[],introduced=history.some(m=>m.role==='assistant'&&/LITIGIOS/i.test(m.content)&&/apoderamiento apud acta/i.test(m.content))):Promise<{type:EventType;payload:Record<string,unknown>}>{
+  async turn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[]=[],introduced=history.some(m=>m.role==='assistant'&&/LITIGIOS/i.test(m.content)&&/apoderamiento apud acta/i.test(m.content))):Promise<{type:EventType;payload:Record<string,unknown>}>{
+    const guidanceDocumentType=declaredDocumentType(text)??history.filter(m=>m.role==='user').map(m=>declaredDocumentType(m.content)).filter(Boolean).at(-1);
+    const result=await this.decideTurn(expediente,text,history,introduced);
+    return guidanceDocumentType?{...result,payload:{...result.payload,guidanceDocumentType}}:result;
+  }
+
+  private async decideTurn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[],introduced:boolean):Promise<{type:EventType;payload:Record<string,unknown>}>{
     const n=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
     let reply:ConversationReply|undefined;
+    if(this.phase===3&&!requiresDeterministicHandoff(text))reply=conversationYield(text)??undefined;
     if(this.phase===3&&!requiresDeterministicHandoff(text)){
       const pending=pendingConversationText(expediente);
       if(this.classifyRollout(text).kind==='GREETING'){
@@ -161,14 +191,19 @@ export class StrictConversationAgent {
     }
     if(/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)&&!requiresDeterministicHandoff(text))reply={text:'No me envíes códigos SMS, PIN ni claves bancarias. Para el apoderamiento no necesito esos códigos.',requiresHumanReview:false};
     if(requiresDeterministicHandoff(text)||text==='[CONTENIDO_SENSIBLE_OMITIDO]')reply={text:'Recibido, gracias. Por seguridad, no compartas más credenciales por aquí. Te paso con una persona del despacho.',requiresHumanReview:true,handoffReason:/contrase|password|CONTENIDO_SENSIBLE/i.test(text)?'CERTIFICADO_RECIBIDO':'HUMANO'};
-    if(!reply&&/quiero hablar con|persona de verdad|humano|estoy harto|falleci|tutor legal|menor de edad/.test(n))reply={text:'Disculpa. Te paso con una persona del equipo para que te ayude.',requiresHumanReview:true,handoffReason:'HUMANO'};
+    if(!reply&&/quiero hablar con|persona de verdad|humano|falleci|tutor legal|menor de edad/.test(n))reply={text:'Disculpa. Te paso con una persona del equipo para que te ayude.',requiresHumanReview:true,handoffReason:'HUMANO'};
     if(!reply&&/a que cuenta|iban|transferencia|factura/.test(n))reply={text:'Para revisar el pago te paso con una persona del equipo.',requiresHumanReview:true,handoffReason:'PAGO'};
-    if(!reply&&['PC_TUTORIAL_SENT','WAITING_PDF_SUBMISSION'].includes(expediente.currentState)&&/no puedo|no me deja|me ayudas|puedes ayudar|(?:me da|hay|aparece) (?:un )?error/.test(n))reply={text:'Te ayudo con eso. Para indicarte cómo compartir el certificado desde el ordenador necesito que lo revise el equipo.',requiresHumanReview:true,handoffReason:'FALTA_DATO'};
+    if(!reply&&(expediente.certificateHelpAttempts??0)>0&&( /ya (?:tengo|encontre|he encontrado) (?:la copia|el archivo)|i (?:have|found) (?:the file|the copy)/.test(n)||expediente.certificateHelpAttempts===2&&/^(?:si|yes)[.!\s]*$/.test(n)))reply={text:'Perfecto, ya has localizado la copia. Para entregarla y autorizar su uso en el apoderamiento, el equipo te indicará el canal habilitado; conserva la copia y no envíes la contraseña por este chat.',requiresHumanReview:true,handoffReason:'FALTA_DATO'};
+    if(!reply&&(expediente.certificateHelpAttempts??0)>0){
+      if(/^(?:en (?:el |mi )?|on (?:my |the )?)?(?:movil|mobile|phone|ordenador|pc)[.!\s]*$/.test(n))return {type:EventType.CLIENT_REQUESTS_ASSISTANCE,payload:{helpTopic:/movil|mobile|phone/.test(n)?'COPY_MOBILE':'COPY_PC'}};
+      if(/^(?:no|nope)[.!\s]*$/.test(n))return {type:EventType.CLIENT_EXPORT_FAILED,payload:{}};
+    }
+    if(!reply&&this.phase===3){const guidance=guidanceRequest(expediente,text);if(guidance)return guidance;}
+    if(!reply&&this.phase===3)reply=reviewedConversationReply(expediente,text)??undefined;
     if(!reply){
       const choice=await this.classify(expediente,text,history);
       if(choice.kind==='OPTION'){
-        if(choice.optionId==='NEEDS_ASSISTANCE'&&['PC_TUTORIAL_SENT','WAITING_PDF_SUBMISSION'].includes(expediente.currentState))reply={text:'Te ayudo con eso. Para indicarte cómo compartir el certificado desde el ordenador necesito que lo revise el equipo.',requiresHumanReview:true,handoffReason:'FALTA_DATO'};
-        else return {type:choice.eventType,payload:{conversationOption:choice.optionId,conversationConfidence:choice.confidence}};
+        return {type:choice.eventType,payload:{conversationOption:choice.optionId,conversationConfidence:choice.confidence}};
       }else reply=await this.respond(expediente,text,history);
     }
     return {type:EventType.CLIENT_SMALL_TALK,payload:{responseId:'CONVERSATION_REPLY',rolloutPhase:this.phase,rolloutKind:'WORKFLOW_REQUEST',responseText:reply!.text,requiresHumanReview:reply!.requiresHumanReview,...(reply!.requiresHumanReview?{handoffReason:reply!.handoffReason??'HUMANO',handoffMarker:`[[HANDOFF:${reply!.handoffReason??'HUMANO'}]]`}:{})}};

@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { BotApodExpediente } from '@prisma/client';
 import { EventType, State } from '../domain/fsm/states.js';
 import { ReplyButtonIdSchema, type ReplyButtonId } from '../contracts/whatsapp.contract.js';
+import { isConversationQuestion } from './conversation-guidance.js';
 
 /**
  * The conversation model is a bounded classifier. It may select one reviewed
@@ -106,7 +107,7 @@ const PHRASES: Record<ReplyButtonId, readonly string[]> = {
   REVOKED: ['revocacion realizada', 'ya lo revoque', 'lo he revocado', 'revocado'],
   REISSUED: ['nuevo documento', 'nuevo pdf', 'lo he reenviado', 'reenviado'],
   COURT_APPOINTMENT: ['juzgado', 'via presencial', 'presencial', 'cita en el juzgado'],
-  APUDATA_REQUEST: ['apudata', 'servicio de pago', 'pagar', 'pago', '35 euros', '35€'],
+  APUDATA_REQUEST: ['apudata', 'servicio de pago', 'gestion de pago', 'empresa colaboradora', 'quiero pagar', 'prefiero pagar'],
   HUMAN_HELP: ['gestor', 'persona', 'humano', 'agente'],
 };
 
@@ -137,6 +138,8 @@ function allowedOptions(expediente: Pick<BotApodExpediente, 'currentState' | 'ha
       return ['HAS_CERT_YES', 'DEVICE_PC', 'DEVICE_MOBILE', 'NEEDS_ASSISTANCE', 'COURT_APPOINTMENT', 'APUDATA_REQUEST'];
     case State.FALLBACK_OPTIONS:
       return ['COURT_APPOINTMENT', 'APUDATA_REQUEST', 'HUMAN_HELP'];
+    case State.COURT_FALLBACK_GUIDE_SENT:
+      return ['HAS_CERT_YES','HAS_CERT_NO','DEVICE_PC','DEVICE_MOBILE','HUMAN_HELP'];
     case State.PROVISIONAL_VIABILIZED:
     case State.REVOCATION_GUIDE_SENT:
       return ['REVOKED', 'HUMAN_HELP'];
@@ -166,6 +169,7 @@ export function classifyClientText(
   if (typeof text !== 'string' || text.length < 1 || text.length > 4000) return { kind: 'HUMAN_REVIEW', reason: 'UNSUPPORTED_TEXT' };
   const normalized = normalizeText(text);
   if (isPromptInjection(normalized)) return { kind: 'HUMAN_REVIEW', reason: 'PROMPT_INJECTION' };
+  if (isConversationQuestion(text)) return { kind: 'HUMAN_REVIEW', reason: 'UNSUPPORTED_TEXT' };
   const options = allowedOptions(expediente);
   if (!options.length) return { kind: 'HUMAN_REVIEW', reason: 'UNSUPPORTED_TEXT' };
   const explicitStop = /\b(?:stop|parar|cancelar|no me escribas|no quiero seguir)\b/.test(normalized);
@@ -231,7 +235,7 @@ export function validateModelReply(raw: unknown): ConversationReply | null {
   if (!parsed.success) return null;
   const text = parsed.data.text
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
-    .replace(/\s+/g, ' ')
+    .replace(/[^\S\n]+/g, ' ').replace(/\n{3,}/g, '\n\n')
     .trim();
   if (!text || text.length > 1600) return null;
   if (/localhost|127\.0\.0\.1|(?:api|access|private|client)[ _-]?key|token|secret|\b(?:[XYZ]\s*\d{7}\s*[A-Z]|\d{8}\s*[A-Z])\b|\b(?:\+?34[ .-]?)?[6789]\d{8}\b|\p{Extended_Pictographic}|\[\[|\bTODO\b/iu.test(text)) return null;
@@ -240,6 +244,12 @@ export function validateModelReply(raw: unknown): ConversationReply | null {
   for(const url of allowedUrls)safe=safe.replaceAll(url,'enlace oficial');
   if(redactConversationPii(safe)!==safe||(text.match(/\?/g)?.length??0)>1)return null;
   const normalized = normalizeText(text);
+  // Explanations must distinguish the public procedure from optional services.
+  if (/\b(?:gratis|gratuit[oa]|sin coste|sin costo|no (?:tienes|tendra[s]?) que pagar)\b/.test(normalized)
+    && (!/por (?:tu|su|mi) cuenta|(?:lo haces|lo hace) (?:tu|usted)|(?:en (?:el|un) juzgado|sede judicial)/.test(normalized)
+      || !/opcional|empresa colaboradora|gestion.{0,30}(?:pago|coste)/.test(normalized))) return null;
+  // A text-only model has no document receipt, review or filing evidence.
+  if (/\b(?:ya (?:tenemos|esta (?:listo|completo|validado|revisado))|(?:he|hemos) (?:recibido|revisado|validado|aprobado))\b.{0,70}(?:apoderamiento|apud|documento|pdf|justificante)|(?:apoderamiento|apud|documento|pdf|justificante).{0,60}(?:esta|ha sido) (?:recibido|revisado|validado|aprobado|archivado|incorporado)|(?:tramite|expediente).{0,30}(?:completado|finalizado|cerrado)/.test(normalized)) return null;
   const withoutVirtualIdentity=normalized.replace(/\bsoy dayana, (?:la )?asistente virtual de litigios\b/g,'');
   if (/(?:soy|me llamo|mi nombre es|te (?:habla|atiende))\b.{0,40}\bdayana\b|\bsoy (?:una? |la |el )?(?:persona|humana?|abogad[oa]|auditora?|responsable|profesional)\b/.test(withoutVirtualIdentity)) return null;
   // The model has no evidence of legal completion, fee terms, or deadlines.

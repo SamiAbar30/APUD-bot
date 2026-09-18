@@ -52,12 +52,12 @@ try{
     switch(s.id){
       case'happy_ordenador':checks.deviceQuestion=/movil.*ordenador/.test(norm(turns[0]?.reply??''));checks.guide=turns.some(t=>t.attachment==='TUTORIAL'&&/autofirma/.test(norm(t.reply))&&/incognito/.test(norm(t.reply))&&t.reply.includes('sedejudicial.justicia.es'));checks.awaitActualDocument=/pdf|documento/.test(norm(last.reply))&&!hasHandoff('APUD_ACTA_RECIBIDO');amendments.push('Text claiming a file was sent cannot replace actual PDF receipt; request the attachment.');break;
       case'happy_movil_a_ordenador':checks.computerRequired=/ordenador/.test(norm(last.reply));checks.noPasswordRequest=!/contrasena/.test(combined);break;
-      case'stuck_ordenador':checks.missingInstructionsHandoff=hasHandoff('FALTA_DATO');amendments.push('Computer sharing instructions remain TODO; FALTA_DATO instead of inventing a password request.');break;
+      case'stuck_ordenador':checks.guidanceBeforeHandoff=!c.automationPaused&&last.state==='PC_TUTORIAL_SENT'&&/certificado|area del ciudadano|pantalla|autofirma/.test(norm(last.reply));amendments.push('User correction: first difficulties require guided troubleshooting, then certificate-copy assistance, not immediate FALTA_DATO.');break;
       case'cert_recibido_no_echo':{
-        checks.handoffStops=hasHandoff('FALTA_DATO')&&last.event==='HALTED_AFTER_HANDOFF';
+        checks.credentialHandoff=hasHandoff('CERTIFICADO_RECIBIDO')&&c.automationPaused;
         const beforeCalls=model.metrics.calls;const secretTurn=await agent.turn({currentState:'PC_TUTORIAL_SENT',hasDigitalCert:true},s.user_turns.at(-1)!);
         checks.secretNotSentToProvider=model.metrics.calls===beforeCalls;checks.receiptNoEcho=secretTurn.payload.handoffReason==='CERTIFICADO_RECIBIDO'&&!JSON.stringify(secretTurn).includes('Perro1234');
-        amendments.push('After the earlier TODO handoff, automation stays stopped. A separate credential guard verifies non-echo and zero provider calls without reading certificate files.');break;
+        amendments.push('Ordinary difficulties stay in guided assistance. Actual credential-like content still stops automation and is never sent to the provider.');break;
       }
       case'no_cert_clave_dni':checks.dniCertificateRoute=/fnmt/.test(combined)&&!/cl[a@]ve.{0,20}(?:permite|puedes) firmar/.test(combined);amendments.push('Master uses the known DNI to provide FNMT routes, not a new DNI/Cl@ve branch.');break;
       case'no_cert_nie':checks.townHall=/ayuntamiento/.test(combined);break;

@@ -302,7 +302,7 @@ function toAskHasPc(ctx: Ctx, note = 'Certificate on mobile: ask whether the cli
 function toPcTutorial(ctx: Ctx): TransitionResult {
   return decide(ctx, State.PC_TUTORIAL_SENT, media(TemplateId.PC_TUTORIAL, [MediaAssetId.TUTORIAL_PC_PDF, MediaAssetId.REPRESENTATIVES_LIST_PDF]), {
     note: 'Certificate on PC: send Sede tutorial and approved representatives list',
-    patch: { hasDigitalCert: true, certDevice: CertDevice.PC },
+    patch: { hasDigitalCert: true, certDevice: CertDevice.PC, digitalHelpAttempts:0, certificateHelpAttempts:0 },
   });
 }
 
@@ -321,8 +321,8 @@ function toConsentRequest(ctx: Ctx, note: string): TransitionResult {
   });
 }
 
-function acquisitionTemplate(exp: Expediente): TemplateId {
-  const type = parseSpanishIdentityDocument(exp.dni).type;
+function acquisitionTemplate(exp: Expediente, declared?:unknown): TemplateId {
+  const type = declared==='NIE'||declared==='DNI'?declared:parseSpanishIdentityDocument(exp.dni).type;
   if (type === IdentityDocumentType.DNI) return TemplateId.CERT_ACQUISITION_LINKS_DNI;
   if (type === IdentityDocumentType.NIE) return TemplateId.CERT_ACQUISITION_LINKS_NIE;
   return TemplateId.CERT_ACQUISITION_LINKS_UNKNOWN_ID;
@@ -333,13 +333,37 @@ function toAcquisitionLinks(ctx: Ctx): TransitionResult {
   return decide(
     ctx,
     State.CERT_ACQUISITION_LINKS_SENT,
-    buttons(acquisitionTemplate(ctx.exp), [ReplyButton.DEVICE_PC, ReplyButton.DEVICE_MOBILE, ReplyButton.COURT_APPOINTMENT], { identityDocumentType: type }),
-    { note: 'No certificate: send official acquisition links for the identity document type', patch: { hasDigitalCert: false, certDevice: CertDevice.NONE } },
+    buttons(acquisitionTemplate(ctx.exp,ctx.payload.guidanceDocumentType), [ReplyButton.DEVICE_PC, ReplyButton.DEVICE_MOBILE, ReplyButton.NEEDS_ASSISTANCE], { identityDocumentType: type }),
+    { note: 'No certificate: send official acquisition links for the identity document type', patch: { hasDigitalCert: false, certDevice: CertDevice.NONE, digitalHelpAttempts:0, certificateHelpAttempts:0 } },
   );
 }
 
 function toCourtFallback(ctx: Ctx, template: TemplateId, note: string): TransitionResult {
   return decide(ctx, State.COURT_FALLBACK_GUIDE_SENT, media(template, [MediaAssetId.COURT_POWER_CHECKLIST_GENERATED]), { note });
+}
+
+/** Help first, certificate-copy assistance second, alternatives only after failures. */
+function guidedHelp(ctx: Ctx): TransitionResult {
+  const attempts = (ctx.exp.digitalHelpAttempts ?? 0) + 1;
+  const copyAttempts = ctx.exp.certificateHelpAttempts ?? 0;
+  const failed = ctx.type === EventType.CLIENT_EXPORT_FAILED;
+  const hasCert = ctx.exp.hasDigitalCert === true;
+  const fallback = () => decide(ctx, State.FALLBACK_OPTIONS, buttons(TemplateId.FALLBACK_OPTIONS, [ReplyButton.COURT_APPOINTMENT, ReplyButton.APUDATA_REQUEST, ReplyButton.HUMAN_HELP]), {
+    note:'Repeated guided attempts exhausted; offer court or partner alternatives',
+    patch:{digitalHelpAttempts:attempts,certificateHelpAttempts:copyAttempts},
+  });
+  if (!hasCert && ctx.exp.hasDigitalCert === false && attempts >= 3 && failed) return fallback();
+  if (hasCert && (copyAttempts > 0 || attempts >= 3 || ctx.type === EventType.CLIENT_HAS_NO_PC)) {
+    if (copyAttempts >= 3 && failed) return fallback();
+    return decide(ctx, ctx.exp.currentState, message(TemplateId.CERTIFICATE_COPY_HELP, { helpTopic:String(ctx.payload.helpTopic??'') }), {
+      note:'Help locate and prepare the certificate copy before offering alternatives',
+      patch:{digitalHelpAttempts:attempts,certificateHelpAttempts:copyAttempts+1},
+    });
+  }
+  return decide(ctx, ctx.exp.currentState, message(TemplateId.DIGITAL_STEP_HELP, { helpTopic:String(ctx.payload.helpTopic??''),guidanceDocumentType:String(ctx.payload.guidanceDocumentType??'') }), {
+    note:'Continue the current digital step with practical guidance; no handoff',
+    patch:{digitalHelpAttempts:attempts},
+  });
 }
 
 function toApudataPreapproval(ctx: Ctx): TransitionResult {
@@ -911,7 +935,7 @@ const certAcquisitionLinksSent: Handler = (ctx) => {
     case EventType.CLIENT_PDF_RECEIVED:
       return toAudit(ctx, String(ctx.payload.documentId), String(ctx.payload.sha256), DocumentType.PENDING_REVIEW, 'PDF received: audit it', {});
     case EventType.REMINDER_DUE:
-      return reminder(ctx, buttons(acquisitionTemplate(ctx.exp), [ReplyButton.DEVICE_PC, ReplyButton.DEVICE_MOBILE, ReplyButton.COURT_APPOINTMENT]));
+      return reminder(ctx, buttons(acquisitionTemplate(ctx.exp), [ReplyButton.DEVICE_PC, ReplyButton.DEVICE_MOBILE, ReplyButton.NEEDS_ASSISTANCE]));
     default:
       return undefined;
   }
@@ -919,6 +943,11 @@ const certAcquisitionLinksSent: Handler = (ctx) => {
 
 const courtFallbackGuideSent: Handler = (ctx) => {
   switch (ctx.type) {
+    case EventType.CLIENT_REQUESTS_ASSISTANCE:
+      if(ctx.payload.resumeDigital===true)return ctx.exp.certDevice===CertDevice.PC?toPcTutorial(ctx):toAskDevice(ctx,'Client wants guidance to complete the digital power');
+      return undefined;
+    case EventType.CLIENT_HAS_NO_CERT:
+      return toAcquisitionLinks(ctx);
     case EventType.CLIENT_PDF_RECEIVED:
       return toAudit(ctx, String(ctx.payload.documentId), String(ctx.payload.sha256), DocumentType.ACTA_JUZGADO, 'Court power received: audit it', {});
     case EventType.CLIENT_REQUESTS_URGENT_PAID:
@@ -1170,7 +1199,7 @@ const STATE_HANDLERS: Readonly<Record<State, Handler>> = Object.freeze({
   [State.REVOCATION_GUIDE_SENT]: revocationGuideSent,
   [State.WAITING_REVOCATION_REISSUE]: waitingRevocationReissue,
   [State.CERT_ACQUISITION_LINKS_SENT]: certAcquisitionLinksSent,
-  [State.FALLBACK_OPTIONS]: ctx => ctx.type===EventType.CLIENT_CANNOT_GET_CERT ? toCourtFallback(ctx, TemplateId.COURT_POWER_CHECKLIST, 'Client selected the court route') : ctx.type===EventType.CLIENT_REQUESTS_URGENT_PAID ? toApudataPreapproval(ctx) : ctx.type===EventType.CLIENT_HAS_CERT ? toAskDevice(ctx, 'Certificate now available') : undefined,
+  [State.FALLBACK_OPTIONS]: ctx => ctx.type===EventType.CLIENT_CANNOT_GET_CERT ? toCourtFallback(ctx, TemplateId.COURT_POWER_CHECKLIST, 'Client selected the court route') : ctx.type===EventType.CLIENT_REQUESTS_URGENT_PAID ? toApudataPreapproval(ctx) : ctx.type===EventType.CLIENT_HAS_NO_CERT ? toAcquisitionLinks(ctx) : ctx.type===EventType.CLIENT_HAS_CERT||ctx.type===EventType.CLIENT_REQUESTS_ASSISTANCE&&ctx.payload.resumeDigital===true ? toAskDevice(ctx, 'Client wants to continue digitally') : undefined,
   [State.COURT_FALLBACK_GUIDE_SENT]: courtFallbackGuideSent,
   [State.APUDATA_PENDING_PREAPPROVAL]: apudataPendingPreapproval,
   [State.APUDATA_WAITING_PAYMENT]: apudataWaitingPayment,
@@ -1288,10 +1317,8 @@ export function transition(input: TransitionInput): TransitionResult {
   }
 
   const ctx: Ctx = { exp: expediente, type, payload: check.value, now };
-  if(type===EventType.CLIENT_EXPORT_FAILED){
-    if([State.PC_TUTORIAL_SENT,State.WAITING_PDF_SUBMISSION,State.MOBILE_TRIAGE_PC_CHECK,State.MOBILE_EXPORT_GUIDE_SENT].includes(expediente.currentState))return toConsentRequest(ctx,'Client cannot complete the digital route: offer secure assistance');
-    if([State.INITIAL_TRIAGE,State.WAITING_CERT_RESPONSE,State.CERT_ACQUISITION_LINKS_SENT,State.MOBILE_ASSIST_CONSENT_REQUESTED,State.MOBILE_ASSIST_PROCESSING,State.FALLBACK_OPTIONS].includes(expediente.currentState))return decide(ctx, State.FALLBACK_OPTIONS, buttons(TemplateId.FALLBACK_OPTIONS,[ReplyButton.COURT_APPOINTMENT,ReplyButton.APUDATA_REQUEST,ReplyButton.HUMAN_HELP]),{discard:true,note:'Digital issuance or sharing unavailable: offer both alternatives'});
-  }
+  const guidedStates = [State.INITIAL_TRIAGE,State.WAITING_CERT_RESPONSE,State.CERT_ACQUISITION_LINKS_SENT,State.PC_TUTORIAL_SENT,State.WAITING_PDF_SUBMISSION,State.MOBILE_TRIAGE_PC_CHECK,State.MOBILE_EXPORT_GUIDE_SENT];
+  if ([EventType.CLIENT_EXPORT_FAILED,EventType.CLIENT_REQUESTS_ASSISTANCE,EventType.CLIENT_HAS_NO_PC].includes(type) && guidedStates.includes(expediente.currentState)) return guidedHelp(ctx);
   const handler = STATE_HANDLERS[expediente.currentState];
   return handler(ctx) ?? globalHandler(ctx);
 }

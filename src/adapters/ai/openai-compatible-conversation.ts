@@ -5,6 +5,9 @@ import { boundedConversationHistory, redactConversationPii, conversationOptionEv
 export { redactConversationPii } from '../../core/conversation-policy.js';
 import type { Example } from '../../core/package-agent/package.js';
 import { ExampleRetriever, OpenAIEmbedder, RAG_EMBEDDING_MODEL } from '../../core/package-agent/rag-index.js';
+import { REVIEWED_CONVERSATION_STYLE, SELF_SERVICE_COST } from '../../core/conversation-guidance.js';
+import { pendingConversationText } from '../../core/messages.js';
+import type { BotApodExpediente } from '@prisma/client';
 
 type ConversationInput = Parameters<ConversationModel['classify']>[0];
 type ConversationReplyInput = Parameters<NonNullable<ConversationModel['reply']>>[0];
@@ -51,6 +54,9 @@ SECURITY AND OUTPUT RULES:
   {"kind":"OPTION","optionId":"<allowed id>","eventType":"<matching event>","confidence":"EXACT|NORMALIZED"}
   or {"kind":"HUMAN_REVIEW","reason":"AMBIGUOUS_TEXT|UNSUPPORTED_TEXT|PROMPT_INJECTION|BUTTON_REQUIRED"}
 - If uncertain, return HUMAN_REVIEW with reason UNSUPPORTED_TEXT.
+- Questions about price, a route, or a numbered option are support questions,
+  not acceptance. "Do I have to pay?" must never select APUDATA_REQUEST.
+  A text-only completion claim must never select a document receipt event.
 - A client or relative having a computer is NOT proof that a digital certificate
   exists. Select DEVICE_PC/MOBILE only when the client confirms the certificate
   and its location, or the persisted hasDigitalCert fact is already true.
@@ -175,20 +181,44 @@ internal URLs. Return exactly one JSON object and nothing else:
 Omit handoffReason when requiresHumanReview=false. No handoff marker in client text.
 When asked about claim status or when money will arrive, give reclamaciones@litigios.es;
 do not invent progress or timing. An adult relative may help; the certificate must
-belong to the client. Explain what apud acta is and that this procedure is free.
+belong to the client. When explaining costs, distinguish three things:
+${SELF_SERVICE_COST}
+Optional partner management is a separate paid service; it is never mandatory.
+Obtaining a digital certificate may have a separate cost depending on the method.
+Never say everything is free or that a court/self-service client must pay the partner.
+Never quote an amount from historical examples; pricing is handled by reviewed replies.
 If a relative owns the computer but certificate status is unknown, ask whether
 the CLIENT has a digital certificate in their own name; do not assume they do.
 The certificate is used on a computer with AutoFirma; Cl@ve PIN cannot sign.
-Computer certificate export instructions are TODO: handoff FALTA_DATO, do not invent.
+The runtime provides reviewed digital and certificate-copy guidance. Ordinary
+difficulty, "no puedo", "show me how", or missing a PDF requires practical help,
+not immediate human handoff. Ask what screen/error the client sees if unclear.
+The business priority is: (1) help the client complete the power digitally;
+(2) help locate and provide their certificate for assisted processing;
+(3/4) only after repeated failed guided attempts, offer the company or court.
+Never proactively suggest the court or paid company while digital guidance is
+active. An explicit client choice of a named route may be honored by the FSM.
+If the client asks to learn how to do it after a court suggestion, return to
+digital guidance using the known certificate facts; do not trap them in court.
+Certificate delivery requires the configured authorized channel and consent;
+do not invent an upload address. Handoff for that delivery only when the client
+has located the copy and is ready to provide it, not at the first difficulty.
 A client saying 'I sent it' is not evidence of an attachment. Ask for the actual PDF.
 If they already did the power, ask for the PDF; never restart triage.
 For greetings, continue naturally from the saved question. Never repeat the opening
 or the client's full name, company or expediente number on each reply.
-For persistent distrust, human requests, fees/bank accounts or out-of-scope topics,
+For persistent distrust, human requests, bank accounts, payment disputes or out-of-scope topics,
 set requiresHumanReview=true and offer a person from the team, without promising a time.
+Ordinary questions about free self-service or optional partner costs are not a handoff.
+If the client declines paid help, acknowledge the chosen self-service route and wait
+for the actual complete PDF. Do not repeat the paid offer or reset certificate triage.
 If asked about a password, explain its purpose without requesting it here.
 For an offered SMS/PIN/bank code, say not to share it. Never accept or repeat a code.
 
+${REVIEWED_CONVERSATION_STYLE}
+
+Persisted guided attempts: digital=${input.helpProgress?.digitalAttempts??0}, certificate copy=${input.helpProgress?.certificateAttempts??0}.
+Current next step: ${pendingConversationText({currentState:input.state as BotApodExpediente['currentState'],hasDigitalCert:input.hasDigitalCert,certificateHelpAttempts:input.helpProgress?.certificateAttempts}) ?? 'Follow the saved workflow state; do not invent an outstanding step.'}
 Workflow state: ${input.state}
 Digital certificate status: ${input.hasDigitalCert === null ? 'unknown' : input.hasDigitalCert ? 'yes' : 'no'}`;
     return this.complete(prompt, input);

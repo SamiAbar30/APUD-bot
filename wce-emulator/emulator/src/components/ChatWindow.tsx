@@ -3,6 +3,7 @@ import { ChatMessage, UIReply } from '@/types/message';
 import { MessageRenderer } from './MessageRenderer';
 import { Textarea } from './ui/textarea';
 import { Button } from './ui/button';
+import { BotActivity, BotActivityState } from './BotActivity';
 import { Send, Paperclip, Image as ImageIcon, Video, FileText, MapPin } from 'lucide-react';
 import {
   DropdownMenu,
@@ -14,9 +15,10 @@ import {
 interface ChatWindowProps {
   messages: ChatMessage[];
   onReply: (reply: UIReply) => void;
+  activity: BotActivityState;
 }
 
-export const ChatWindow = ({ messages, onReply }: ChatWindowProps) => {
+export const ChatWindow = ({ messages, onReply, activity }: ChatWindowProps) => {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const [inputValue, setInputValue] = useState('');
 
@@ -113,6 +115,7 @@ export const ChatWindow = ({ messages, onReply }: ChatWindowProps) => {
       </div>
 
       {/* Input Area */}
+      <BotActivity activity={activity} />
       <div className="border-t bg-card px-4 py-3">
         <div className="flex gap-2 items-center">
           <DropdownMenu>

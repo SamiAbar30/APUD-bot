@@ -4,7 +4,8 @@ import { TemplateId } from '../domain/fsm/actions.js';
 export const REMINDER_DAYS = [3, 7, 15] as const;
 export const DAY_MS = 86_400_000;
 export const FOLLOW_UP_STATES = new Set<ApodState>(['MOBILE_ASSIST_PROCESSING','WAITING_CERT_RESPONSE','MOBILE_TRIAGE_PC_CHECK','MOBILE_EXPORT_GUIDE_SENT','MOBILE_ASSIST_CONSENT_REQUESTED','PC_TUTORIAL_SENT','WAITING_PDF_SUBMISSION','CERT_ACQUISITION_LINKS_SENT','FALLBACK_OPTIONS','COURT_FALLBACK_GUIDE_SENT','WAITING_REVOCATION_REISSUE','REVOCATION_GUIDE_SENT']);
-export function stepFor(c:Pick<BotApodExpediente,'currentState'|'dni'|'hasDigitalCert'> & Partial<Pick<BotApodExpediente,'stepReached'>>):string {
+export function stepFor(c:Pick<BotApodExpediente,'currentState'|'dni'|'hasDigitalCert'> & Partial<Pick<BotApodExpediente,'stepReached'|'certificateHelpAttempts'>>):string {
+  if((c.certificateHelpAttempts??0)>0&&['PC_TUTORIAL_SENT','WAITING_PDF_SUBMISSION','MOBILE_TRIAGE_PC_CHECK','MOBILE_EXPORT_GUIDE_SENT'].includes(c.currentState))return 'LOCALIZAR_COPIA_CERTIFICADO';
   switch(c.currentState){
     case 'CERT_ACQUISITION_LINKS_SENT':return /^[XYZ]/.test(c.dni)?'ENVIAR_AYUNTAMIENTO_NIE':'ENVIAR_LINKS_DNI';
     case 'PC_TUTORIAL_SENT':case 'WAITING_PDF_SUBMISSION':return 'ENVIAR_PDF_ORDENADOR';
@@ -30,6 +31,7 @@ export function followUpText(c:BotApodExpediente,day:number):string {
   const intro=`Hola ${name}, `;
   const later=day>3;
   switch(c.stepReached){
+    case 'LOCALIZAR_COPIA_CERTIFICADO':return intro+'¿has podido localizar la copia de tu certificado para que podamos ayudarte con el apoderamiento? Si te has atascado, dime en qué paso.';
     case 'ENVIAR_LINKS_DNI':return intro+(later?'seguimos pendientes de tu certificado digital. Si te resulta complejo, cuéntanos dónde te has atascado y revisamos las alternativas.':'¿pudiste solicitar el certificado digital con los enlaces que te enviamos?');
     case 'ENVIAR_AYUNTAMIENTO_NIE':return intro+(later?'¿te dieron fecha para la cita de acreditación del certificado?':'¿pudiste consultar la cita para acreditar tu identidad en la oficina o Ayuntamiento habilitado?');
     case 'ENVIAR_PDF_ORDENADOR':return intro+(later?'¿pudiste descargar el justificante PDF del apud acta? Si te has atascado en algún paso del tutorial, dime cuál.':'¿has podido avanzar con el apud acta siguiendo el tutorial que te facilitamos?');

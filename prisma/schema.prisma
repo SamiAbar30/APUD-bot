@@ -45,6 +45,8 @@ model BotApodExpediente {
   version Int @default(0)
   hasDigitalCert Boolean?
   certDevice String?
+  digitalHelpAttempts Int @default(0)
+  certificateHelpAttempts Int @default(0)
   consentGranted Boolean @default(false)
   consentVersion String?
   consentGrantedAt DateTime?

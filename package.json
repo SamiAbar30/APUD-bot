@@ -30,13 +30,17 @@
     "test:setup": "tsx scripts/test-setup.ts",
     "test:conversation-ai": "tsx scripts/test-conversation-ai.ts",
     "test:conversation-flow": "tsx scripts/test-conversation-integration.ts",
+    "test:conversation-pricing": "node --import tsx scripts/test-conversation-pricing.ts",
+    "test:guidance-progression": "node --import tsx scripts/test-guidance-progression.ts",
     "test:classifier": "tsx scripts/test-conversation-classifier.ts",
     "test:real": "tsx scripts/verify-real.ts",
     "verify:new-spec": "tsx scripts/verify-new-spec.ts",
     "verify:live-ai": "tsx scripts/verify-live-ai.ts",
     "eval:agent": "tsx scripts/eval-agent.ts",
     "rag:build": "tsx scripts/build-rag-index.ts",
-    "eval:retrieval": "tsx scripts/eval-retrieval.ts"
+    "eval:retrieval": "tsx scripts/eval-retrieval.ts",
+    "test:conversation-pacing": "node --import tsx scripts/test-conversation-pacing.ts",
+    "test:conversation-inbox": "node --import tsx scripts/test-conversation-inbox.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",

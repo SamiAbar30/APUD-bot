@@ -119,6 +119,9 @@ try {
   const replyRequest = captured.at(-1);
   assert.ok(replyRequest);
   assert.match(JSON.stringify(replyRequest.body), /Responde en español/);
+  assert.match(JSON.stringify(replyRequest.body), /Optional partner management is a separate paid service/);
+  assert.match(JSON.stringify(replyRequest.body), /Current next step: ¿Tienes certificado digital a tu nombre/);
+  assert.match(JSON.stringify(replyRequest.body), /Do not repeat the paid offer or reset certificate triage/);
 
   responseBody = JSON.stringify({
     kind: 'OPTION',

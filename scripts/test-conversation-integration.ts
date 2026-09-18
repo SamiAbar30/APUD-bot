@@ -23,18 +23,16 @@ const initialCase = {
 } as any;
 
 const firstContact = messageForCase(initialCase);
-assert.match(firstContact.text, /DANIEL EJEMPLO/);
-assert.match(firstContact.text, /MYKREDIT/);
-assert.match(firstContact.text, /24531/);
 assert.match(firstContact.text, /LITIGIOS/);
-assert.match(firstContact.text, /Mi nombre es Dayana/);
+assert.match(firstContact.text, /soy Dayana, la asistente virtual/);
 assert.match(firstContact.text, /apoderamiento apud acta/);
-assert.match(firstContact.text, /¿Dispone de certificado digital\?/);
-assert.deepEqual(firstContact.buttons?.map((button) => button.id), ['HAS_CERT_YES', 'HAS_CERT_NO']);
+assert.match(firstContact.text, /gratuito si lo haces por tu cuenta/);
+assert.doesNotMatch(firstContact.text, /juzgado|empresa colaboradora|35|37/);
+assert.match(firstContact.text, /¿Tienes certificado digital a tu nombre\?/);
 
 const phase3Greeting = classifyRolloutInput(3, 'hi');
 assert.deepEqual(phase3Greeting, { phase: 3, kind: 'GREETING', responseId: 'PHASE3_GREETING' });
-assert.match(approvedRolloutReply(phase3Greeting.responseId) ?? '', /Dayana/);
+assert.match(approvedRolloutReply(phase3Greeting.responseId) ?? '', /asistente virtual/);
 assert.match(approvedRolloutReply(phase3Greeting.responseId) ?? '', /LITIGIOS/);
 const smallTalkPayload = validateEventPayload(EventType.CLIENT_SMALL_TALK, {
   responseId: phase3Greeting.responseId,
@@ -60,8 +58,8 @@ const supportedQuestion = await localSupportAgent.respond(initialCase, 'No entie
 assert.match(supportedQuestion.text, /puedo ayudarte|parte|gestor/i);
 assert.equal(supportedQuestion.requiresHumanReview, false);
 const outOfScopeQuestion = await localSupportAgent.respond(initialCase, '¿Puedes recomendarme una película?');
-assert.match(outOfScopeQuestion.text, /profesional|gestor/i);
-assert.equal(outOfScopeQuestion.requiresHumanReview, true);
+assert.match(outOfScopeQuestion.text, /apoderamiento/i);
+assert.equal(outOfScopeQuestion.requiresHumanReview, false);
 const humanRequest = await localSupportAgent.respond(initialCase, 'Quiero hablar con una persona');
 assert.match(humanRequest.text, /profesional|gestor/i);
 assert.equal(humanRequest.requiresHumanReview, true);

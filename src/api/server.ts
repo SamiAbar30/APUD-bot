@@ -11,6 +11,7 @@ import type { Queues } from '../queue/queues.js';
 import { AppError,constantEqual,errorCode,requireOutbound } from '../infrastructure/security.js';
 import { readinessConfig } from '../config/env.js';
 import { DebounceBuffer } from '../core/debounce-buffer.js';
+import { conversationActivity } from '../core/conversation-activity.js';
 import { json } from '../core/workflow-service.js';
 import { E } from '../core/workflow-events.js';
 import { EventType } from '../domain/fsm/states.js';
@@ -100,6 +101,10 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
     await assistedRoutes(api,flow,executor);
     await addressRoutes(api,flow,executor);
     api.get('/setup',async()=>({...readinessConfig(env),runtime:'Node.js 22',validation:env.DATA_MODE==='mock'?'SETUP_WITH_MOCK_DATA':'REAL_EXTERNAL_E2E_PENDING'}));
+    api.get('/emulator/activity',async()=>{
+      if(env.WHATSAPP_TRANSPORT!=='emulator')throw new AppError('NOT_FOUND',404);
+      return conversationActivity(flow.db,env.DEMO_WHATSAPP_RECIPIENTS[0]??'',env.CONVERSATION_QUIET_MS);
+    });
     api.get('/agent/status',async()=>({name:'APUD_agent',provider:env.CONVERSATION_AI_PROVIDER,model:conversationAi.config?.model,mode:env.AI_MODE,trainingMethod:'SYSTEM_PROMPT_AND_RETRIEVED_FEW_SHOT',retrieval:conversationModel?await conversationModel.retrievalStatus():'NO_MODEL',fineTuned:false,referenceStatus:referenceAgent.status,packageHash:referenceAgent.context?.packageHash,corpus:referenceAgent.context?.training,usableStyleExamples:referenceAgent.context?.dataset?.examples.length,pendingPlaceholders:referenceAgent.context?.todoPlaceholders,masterWorkflow:'AVISO27_MACRO10_DAYANA',conversationPhase:env.CONVERSATION_PHASE}));
     api.get('/capabilities',async()=>({operatorEvents,consentVersion:env.CONSENT_VERSION,consentConfigured:!!env.CONSENT_TEXT_FILE,documentRejection:true,initialContact:'CASE_OPENED -> approved WhatsApp question',documentsRequiredAtStart:false,conversationPolicy:'REVIEWED_SUPPORT_PLUS_STRICT_WORKFLOW',conversationPhase:env.CONVERSATION_PHASE,conversationProvider:env.CONVERSATION_AI_PROVIDER,conversationModel:conversationAiEnabled&&conversationAi.status==='CONFIGURED'?conversationAi.config.model:'LOCAL_POLICY_ONLY',aiMode:env.AI_MODE,conversationAiStatus:effectiveConversationAiStatus,referenceAgentStatus:referenceAgent.status,referenceAgentPackage:referenceAgent.context?.packageName??null,referenceAgentTraining:referenceAgent.context?.training??null,kmaleonSearch:!!executor.adapters.kmaleon,kmaleonAddressLookup:executor.adapters.kmaleon?.addressLookupConfigured===true,assistedDraftEnabled:env.OUTBOUND_ENABLED&&!!executor.adapters.sede,assistedCertificate:executor.adapters.sede?'POST /api/cases/:id/assisted-draft':'NOT_CONFIGURED',productionVerified:false}));
     api.get('/kmaleon/search',async request=>{
@@ -182,7 +187,7 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
       await flow.db.botApodInbox.update({where:{id},data:{expedienteId:c.id,status:'PENDING',notBefore:new Date()}});return {status:'PENDING'};
     });
   },{prefix:'/api'});
-  const debounce=new DebounceBuffer(flow.db,queues.inbound);
+  const debounce=new DebounceBuffer(flow.db,queues.inbound,env.CONVERSATION_QUIET_MS);
   const webhookEnabled=(enabled:boolean)=>(env.DATA_MODE==='mock'&&env.NODE_ENV==='test'&&env.SERVICE_MODE==='setup')||(env.DATA_MODE==='real'&&env.SERVICE_MODE==='live'&&enabled);
   await server.register(async webhooks=>{
     webhooks.removeContentTypeParser('application/json');webhooks.addContentTypeParser('application/json',{parseAs:'buffer',bodyLimit:2*1024*1024},(_req,body,done)=>done(null,body));

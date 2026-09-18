@@ -53,6 +53,9 @@ export interface Expediente {
   numeroExpediente?: string | null;
   hasDigitalCert: boolean | null;
   certDevice: string | null;
+  /** Guided support rounds, persisted independently of the history window. */
+  digitalHelpAttempts?: number;
+  certificateHelpAttempts?: number;
   consentGranted: boolean;
   auditStatus: string | null;
   pageCount: number | null;
@@ -88,6 +91,8 @@ export interface Expediente {
  * Applied atomically with the state change (same transaction as the outbox row).
  */
 export interface ExpedientePatch {
+  digitalHelpAttempts?: number;
+  certificateHelpAttempts?: number;
   hasDigitalCert?: boolean | null;
   certDevice?: CertDevice | null;
   consentGranted?: boolean;

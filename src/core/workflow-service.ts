@@ -13,6 +13,7 @@ import type { KmaleonExpedienteCandidate } from '../contracts/kmaleon.contract.j
 import { FOLLOW_UP_STATES, stepFor } from './follow-up.js';
 import type { StrictConversationAgent } from './conversation-agent.js';
 import { requiresDeterministicHandoff } from './conversation-policy.js';
+import { relatedConversationText } from './conversation-batching.js';
 
 export const json = (value:unknown):Prisma.InputJsonValue => JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 export type WorkflowPatch = Prisma.BotApodExpedienteUpdateManyMutationInput;
@@ -56,7 +57,7 @@ export class WorkflowService {
     const decision=evaluateNextStep(snapshot,{type:type as EventType,payload} as WorkflowEvent);
     const enginePatch=decision.actionPayload.expedientePatch;
     const persisted:Record<string,unknown>={};
-    const allowed=new Set(['hasDigitalCert','certDevice','consentGranted','consentVersion','consentGrantedAt','auditStatus','pageCount','isProvisionalFiled','apudataOrderId','apudataPreApproved','apudataApprovalExpiresAt','apudataApprovalEvidence','documentId','documentApproved','clientReviewed','partidoJudicial']);
+    const allowed=new Set(['hasDigitalCert','certDevice','digitalHelpAttempts','certificateHelpAttempts','consentGranted','consentVersion','consentGrantedAt','auditStatus','pageCount','isProvisionalFiled','apudataOrderId','apudataPreApproved','apudataApprovalExpiresAt','apudataApprovalEvidence','documentId','documentApproved','clientReviewed','partidoJudicial']);
     if(enginePatch&&typeof enginePatch==='object'&&!Array.isArray(enginePatch))for(const [key,value]of Object.entries(enginePatch)){if(allowed.has(key))persisted[key]=value;}
     if(persisted.apudataApprovalEvidence===null)persisted.apudataApprovalEvidence=Prisma.DbNull;
     const combined:WorkflowPatch={...patch,...persisted};
@@ -181,7 +182,7 @@ export class WorkflowService {
       if(row.eventType==='PDF_MEDIA'){
         try{await handleMedia(id,(row.payload as Record<string,string>).mediaId!,row.externalId);await this.db.botApodInbox.updateMany({where:{id:row.id,status:'PENDING'},data:{status:'PROCESSED',processedAt:new Date()}});}catch{await this.db.botApodInbox.updateMany({where:{id:row.id,status:'PENDING'},data:{status:'HUMAN_REQUIRED',lastError:'PDF_PROCESSING_FAILED'}});}continue;
       }
-      await this.locked(id,async signal=>{const fresh=await this.db.botApodInbox.findUniqueOrThrow({where:{id:row.id}});if(fresh.status!=='PENDING'||signal.aborted)return;const c=await this.load(id);
+      await this.locked(id,async signal=>{const fresh=await this.db.botApodInbox.findUniqueOrThrow({where:{id:row.id}});if(fresh.status!=='PENDING'||fresh.notBefore.getTime()>Date.now()||signal.aborted)return;const c=await this.load(id);
         // One quiet-period burst is one conversation turn. Keep each durable inbox
         // row and user message; commit all consumed statuses with the one decision.
         const turnRows=[fresh];
@@ -190,7 +191,7 @@ export class WorkflowService {
           const following=pending.slice(pending.findIndex(x=>x.id===row.id)+1);
           for(const next of following){
             const value=String((next.payload as Record<string,unknown>).text??'');
-            if(next.eventType!=='CONVERSATION_TEXT'||next.createdAt.getTime()-turnRows.at(-1)!.createdAt.getTime()>4000||size+1+value.length>4000||requiresDeterministicHandoff(value))break;
+            if(next.eventType!=='CONVERSATION_TEXT'||next.notBefore.getTime()!==fresh.notBefore.getTime()||size+1+value.length>4000||!relatedConversationText(turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')),value))break;
             const current=await this.db.botApodInbox.findUniqueOrThrow({where:{id:next.id}});
             if(current.status!=='PENDING'||current.notBefore.getTime()>Date.now())break;
             turnRows.push(current);size+=1+value.length;
@@ -236,6 +237,13 @@ export class WorkflowService {
         }
         if(!c.identityVerified){await this.db.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'IDENTITY_NOT_VERIFIED'}});return;}
         await this.db.$transaction(async tx=>{
+          if(row.eventType==='CONVERSATION_TEXT'){
+            // An arrival while the model was thinking invalidates this draft. The
+            // shared row lock closes the race between this check and committing.
+            await tx.$queryRaw`SELECT id FROM bot_apod_expedientes WHERE id = ${id} FOR UPDATE`;
+            const newer=await tx.botApodInbox.count({where:{expedienteId:id,status:'PENDING',OR:[{notBefore:{gt:new Date()}},{id:{notIn:pending.map(x=>x.id)}}]}});
+            if(newer)return;
+          }
           await this.transition(tx,c,eventType,eventPayload,{},'WHATSAPP_CLIENT');
           const payload=eventPayload;
           const needsHumanReview=payload.requiresHumanReview===true;

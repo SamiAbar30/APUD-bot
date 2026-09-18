@@ -32,6 +32,24 @@ const io = new Server(server, {
 // still visible when the operator opens the emulator a moment later.
 const pendingUiMessages = [];
 const recentUiMessages = [];
+let activity = { phase: "offline" };
+let refreshingActivity = false;
+async function refreshActivity() {
+  if (refreshingActivity) return;
+  refreshingActivity = true;
+  try {
+    const response = await axios.get(new URL("/api/emulator/activity", BOT_WEBHOOK_URL).href, {
+      headers: { Authorization: `Bearer ${process.env.OPERATOR_TOKEN || ""}` }, timeout: 2500,
+    });
+    activity = response.data;
+  } catch {
+    activity = { phase: "offline" };
+  } finally {
+    refreshingActivity = false;
+    io.emit("bot_activity", activity);
+  }
+}
+setInterval(() => { if (io.sockets.sockets.size) void refreshActivity(); }, 2000).unref();
 function emitUiMessage(message) {
   recentUiMessages.push(message);
   if (recentUiMessages.length > 20) recentUiMessages.shift();
@@ -76,6 +94,8 @@ app.post("/send-to-emulator", (req, res) => {
 
 // Socket.io: Listen for replies from UI, translate, and POST to bot
 io.on("connection", (socket) => {
+  socket.emit("bot_activity", activity);
+  void refreshActivity();
   console.log("✅ UI client connected:", socket.id);
   const replay = pendingUiMessages.splice(0);
   if (replay.length === 0) replay.push(...recentUiMessages.slice(-10));
@@ -105,8 +125,10 @@ io.on("connection", (socket) => {
       }
       const response = await axios.post(BOT_WEBHOOK_URL, raw, { headers });
       console.log("📤 Sent to bot webhook. Response:", response.status);
+      void refreshActivity();
     } catch (error) {
       console.error("❌ Error sending to bot:", error.message);
+      socket.emit("reply_error", { message: "El mensaje no ha llegado al bot. Comprueba la conexión y vuelve a enviarlo." });
     }
   });
 

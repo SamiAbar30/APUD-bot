@@ -25,6 +25,7 @@ const schema=z.object({
   AI_MODE:z.enum(['online','local']).default('online'),LOCAL_AI_BASE_URL:z.string().url().default('http://127.0.0.1:11434/v1'),LOCAL_AI_MODEL:optional,LOCAL_AI_API_KEY:optional,
   KMALEON_POLLER_ENABLED:bool,KMALEON_POLL_INTERVAL_MS:z.coerce.number().int().min(10000).default(60000),DAYANA_USER_ID:optional,
   REMINDERS_ENABLED:boolTrue,
+  CONVERSATION_QUIET_MS:z.coerce.number().int().min(1000).max(120000).default(60000),
   AI_BASE_URL:optional,AI_API_KEY:optional,AI_MODEL:optional,AI_TIMEOUT_MS:z.coerce.number().int().positive().default(60000),AI_REDACT_PII:boolTrue,AI_STREAM:boolTrue,AI_SIN_TEMPERATURE:boolTrue,
   KMALEON_ENABLED:bool,KMALEON_CONFIG_FILE:optionalPath,KMALEON_BASE_URL:optional,KMALEON_CLIENT_ID:optional,KMALEON_CLIENT_SECRET:optional,KMALEON_AUTH_STATE:optional,KMALEON_REDIRECT_URI:optional,KMALEON_REJECT_UNAUTHORIZED:bool,KMALEON_TIMEOUT_MS:z.coerce.number().int().positive().default(120000),KMALEON_AUTH_TIMEOUT_MS:z.coerce.number().int().positive().default(120000),CARMEN_USER_ID:optional,
   APUDATA_ENABLED:bool,APUDATA_CONFIG_FILE:optionalPath,APUDATA_BASE_URL:optional,APUDATA_ACCESS_TOKEN:optional,APUDATA_ACCOUNT_ID:optional,APUDATA_PAYMENT_IBAN:optional,APUDATA_PAYMENT_EVIDENCE_REF:optional,
