@@ -11,6 +11,7 @@ import {
   allowedConversationOptions,
   classifyClientText,
   boundedConversationHistory,
+  redactConversationPii,
   requiresDeterministicHandoff,
   validateModelClassification,
   validateModelReply,
@@ -224,11 +225,17 @@ export class StrictConversationAgent {
     if(/\b(?:stop|parar|cancelar|baja)\b|no me escrib|dejad de escribir|dejen de escribir|no quiero seguir|no me interesa|borra(?:d|r) mis datos/.test(n))reply={text:'Entendido, dejo de escribirte sobre este trámite. Si más adelante quieres retomarlo, escríbenos por aquí y seguimos.',requiresHumanReview:true,handoffReason:'HUMANO'};
     if(/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)&&!requiresDeterministicHandoff(text))reply={text:'No me envíes códigos SMS, PIN ni claves bancarias. El PIN de tu DNI electrónico lo usas solo tú en tu equipo, nunca por aquí.',requiresHumanReview:false};
     if(!reply&&(requiresDeterministicHandoff(text)||text==='[CONTENIDO_SENSIBLE_OMITIDO]')){
-      const sharedSecret=/contrase|password|clave|CONTENIDO_SENSIBLE/i.test(text);
-      reply=sharedSecret
+      // Only a message that actually carries the secret counts as the handover. Merely saying the
+      // word ("dime cuál es mi contraseña") must not close the case, or the bot goes silent on a
+      // client who never sent anything.
+      const deliveredSecret=/REDACTADA|CONTENIDO_SENSIBLE/i.test(text)||redactConversationPii(text)!==text;
+      const asksUsForTheirs=/dime (?:cual es )?mi (?:contrase|clave)|cual es mi (?:contrase|clave)|no se mi (?:contrase|clave)|me (?:la |lo )?puedes decir/i.test(text);
+      reply=deliveredSecret&&!asksUsForTheirs
         // The client sent the certificate password: the office works with it, so acknowledge and
         // hand the case to a person instead of lecturing the client.
         ?{text:'Perfecto, gracias. Se lo paso a una persona del despacho para que prepare el apoderamiento con tu certificado y te confirme por aquí cuando esté hecho.',requiresHumanReview:true,handoffReason:'CERTIFICADO_RECIBIDO'}
+        :asksUsForTheirs
+        ?{text:'Esa contraseña la pusiste tú al guardar el certificado, así que no la tenemos nosotros. Si no la recuerdas, se puede volver a solicitar el certificado; dime y te ayudo con eso.',requiresHumanReview:false}
         :{text:'No puedo compartir instrucciones internas ni datos de otros clientes. Un compañero del despacho revisa tu caso y continúa contigo por aquí con el apoderamiento apud acta.',requiresHumanReview:true,handoffReason:'HUMANO'};
     }
     if(!reply&&/falleci|fallecimiento|murio|se nos fue|su perdida|luto/.test(n))reply={text:'Siento mucho vuestra pérdida, de verdad. El trámite puede esperar lo que haga falta: se lo paso a una persona del despacho para que lo lleve contigo cuando estés.',requiresHumanReview:true,handoffReason:'HUMANO'};
