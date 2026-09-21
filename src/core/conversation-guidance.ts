@@ -27,8 +27,9 @@ export function conversationYield(text:string):ConversationReply|null {
 export function declaredDocumentType(text:string):'NIE'|'DNI'|undefined {
   const n=normalize(text);
   const matches=[...n.matchAll(/\b(?:tengo|mi documento es|i have)(?: (?:un|el|a))? (nie|dni)\b/g)];
-  const last=matches.at(-1);
-  if(!last||/\b(?:no|not|dont|do not)\s*$/.test(n.slice(0,last.index)))return undefined;
+  const affirmative=matches.filter(match=>!/\b(?:no|not|dont|do not)\s*$/.test(n.slice(0,match.index)));
+  const last=affirmative.at(-1);
+  if(!last)return undefined;
   return last[1]!.toUpperCase() as 'NIE'|'DNI';
 }
 
@@ -75,7 +76,9 @@ export function reviewedConversationReply(c: CaseContext, text: string): Convers
     if (/\b(?:fnmt|certificado|certificate)\b/.test(n) && !/apud|apoderamiento/.test(n)) {
       return reply(`Obtener el certificado y otorgar el apoderamiento son pasos distintos: la vídeo identificación de la FNMT tiene un coste propio, que puedes consultar en ${officialLinks.fnmtVideo}. ${SELF_SERVICE_COST} ${PARTNER_COST}`);
     }
-    return reply(`${court ? 'Si lo haces tú en el juzgado, el apoderamiento es gratuito.' : SELF_SERVICE_COST} ${PARTNER_COST} ${court ? 'Puedes seguir con el juzgado sin contratar esa gestión.' : 'El coste de obtener un certificado, si lo necesitas, depende de la vía que elijas.'}`);
+    return reply(court
+      ? `Si lo haces tú en el juzgado, el apoderamiento es gratuito. ${PARTNER_COST} Puedes seguir con el juzgado sin contratar esa gestión.`
+      : `Dime: ¿tienes certificado digital a tu nombre? El apud acta es gratis por tu cuenta en la Sede Judicial o, sin certificado, en el juzgado. ${PARTNER_COST}`);
   }
   // A numbered option from an old export/app is not a current route selection.
   if (/\b(?:opcion|option)\s*\d\b/.test(n)) {
@@ -84,7 +87,10 @@ export function reviewedConversationReply(c: CaseContext, text: string): Convers
   const completed = /\b(?:ya (?:lo )?(?:hice|he hecho|tengo|termine|esta hecho|esta listo)|ya (?:he )?(?:enviado|mandado)|lo (?:he )?(?:hecho|termine|envie|mande)|i (?:have )?(?:made|did|finished|sent|done) it|ive (?:done|sent|finished) it|done)\b/.test(n);
   const negated = /\b(?:no|not|havent|didnt|todavia|aun|cuando|cuando pueda|when|if)\b/.test(n);
   const explicitPower = /\b(?:apud|apoderamiento|justificante)\b/.test(n) && /\b(?:hecho|tengo|he (?:terminado|enviado|mandado)|hice|done|sent|finished)\b/.test(n);
-  if ((completed || explicitPower) && !negated && (powerSteps.has(c.currentState) || intakeSteps.has(c.currentState))) {
+  // A client supplying an application code has NOT finished anything: "ya tengo el código" must not
+  // be read as "ya lo tengo" (manager test, 18 September).
+  const suppliesCode = /\b(?:codigo|code|solicitud|referencia)\b/.test(n) || /\b[a-z]{0,3}\d{6,}[a-z]?\b/.test(n);
+  if ((completed || explicitPower) && !negated && !suppliesCode && (powerSteps.has(c.currentState) || intakeSteps.has(c.currentState))) {
     if (powerSteps.has(c.currentState) || explicitPower) return reply(REQUEST_POWER_PDF);
     // "Ya lo tengo" after FNMT instructions may mean the certificate, not the power.
     if (!/certificad|certificate|\bpc\b|ordenador|movil|mobile/.test(n)) return reply('¿Has obtenido el certificado digital o ya has terminado el apoderamiento apud acta?');

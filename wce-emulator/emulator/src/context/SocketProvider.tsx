@@ -18,7 +18,7 @@ interface SocketProviderProps {
     url?: string;
 }
 
-export const SocketProvider = ({ children, url = 'http://localhost:3001' }: SocketProviderProps) => {
+export const SocketProvider = ({ children, url = (typeof window !== 'undefined' && window.location.port !== '8080' ? window.location.origin : 'http://localhost:3001') }: SocketProviderProps) => {
     const [socket, setSocket] = useState<Socket | null>(null);
     const [isConnected, setIsConnected] = useState(false);
 

@@ -40,15 +40,31 @@ export function redactConversationPii(text: string): string {
   if (text.length > 4000) return '[MENSAJE_LARGO_OMITIDO]';
   const normalized = normalizeText(text);
   const identityMethodOnly = /^(?:(?:solo )?tengo )?cl[a@]ve(?: pin)?[.!]*$/.test(normalized);
-  const secretLabel = /\b(?:contrasena|password|passphrase|passwd|pin|sms|otp|token|api[ _-]?key|secret|clave|codigo(?:\s+(?:de\s+)?(?:acceso|verificacion|seguridad|autorizacion|sms)))\s*(?:es\s+|[:=]\s*)\S+|(?:mi contrasena|mi password)\s+(?!es segura|para que|por que)\S+|(?:contrasena|password)\s+(?=\S*\d)\S+/i;
+  // A disclosure needs a label, a connector and a value that actually looks like a secret;
+  // "no necesito tu contraseña: bórrala" is advice, not a disclosure.
+  const immediateValue = /\b(?:contrasena|password|passphrase|passwd|pin|sms|otp|token|api[ _-]?key|secret|clave|codigo(?:\s+(?:de\s+)?(?:acceso|verificacion|seguridad|autorizacion|sms))?)\s*(?:\bes\b\s+|[:=]\s*)(\S+)/i.exec(normalized)?.[1] ?? '';
+  // "La contraseña del certificado es X" / "la clave: X": label and value separated by qualifiers.
+  // A negation between them ("no es necesaria") means no secret was disclosed.
+  const labelledValue = /\b(?:contrasena|password|passphrase|passwd|clave|pin)\b(?:(?!\bno\b)[^\n]){0,40}?(?:\bes\b|\bson\b|[:=])\s*(\S+)/i.exec(normalized)?.[1] ?? '';
+  // Only a value that looks like a secret counts: adjectives such as "obligatoria" do not.
+  const looksLikeSecret = (raw: string): boolean => {
+    const candidate = raw.replace(/[.,;:!?)"'¡¿]+$/, '');
+    return candidate.length >= 4
+      && ((/\d/.test(candidate) && /[a-z]/i.test(candidate)) || /[!@#$%^&*_+=]/.test(candidate) || /^\d{4,}$/.test(candidate));
+  };
+  const labelledSecret = looksLikeSecret(labelledValue) || looksLikeSecret(immediateValue);
   const secretMaterial = /-----BEGIN [A-Z ]*(?:PRIVATE KEY|CERTIFICATE)|\b(?:sk|pk)[_-][a-z0-9_-]{12,}|\beyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+|\bBearer\s+\S+|\.(?:p12|pfx|pem|key)\b/i;
   const opaqueValue = /^(?:(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9!@#$%^&*+=_./:-]{8,}|\d{4,8}|[A-Za-z0-9+/=_-]{40,})$/;
-  if ((!identityMethodOnly && secretLabel.test(normalized)) || secretMaterial.test(text) || opaqueValue.test(text.trim())) return '[CONTENIDO_SENSIBLE_OMITIDO]';
+  if ((!identityMethodOnly && labelledSecret) || secretMaterial.test(text) || opaqueValue.test(text.trim())) return '[CONTENIDO_SENSIBLE_OMITIDO]';
   return text
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
-    .replace(/\bES\s*\d{2}(?:[\s-]?\d{4}){5}\b/gi, '[IBAN]')
-    .replace(/\b[XYZ]\s*\d{7}\s*[A-Z]\b/gi, '[NIE]')
-    .replace(/\b\d{8}\s*[A-Z]\b/gi, '[DNI]')
+    .replace(/\b[A-Z]{2}[\s.-]?\d{2}(?:[\s.-]?[A-Za-z0-9]){10,32}\b/g, match => {
+      const compact = match.replace(/[\s.-]/g, '');
+      const digits = compact.match(/\d/g)?.length ?? 0;
+      return /^[A-Z]{2}\d{2}[A-Za-z0-9]{10,30}$/.test(compact) && compact.length >= 15 && digits >= 10 ? '[IBAN]' : match;
+    })
+    .replace(/\b[XYZ][\s.-]?(?:\d[\s.-]?){7}[A-Za-z]\b/gi, match => /^[XYZ]\d{7}[A-Za-z]$/i.test(match.replace(/[\s.-]/g, '')) ? '[NIE]' : match)
+    .replace(/\b(?:\d[\s.-]?){8}[A-Za-z]\b/g, match => /^\d{8}[A-Za-z]$/.test(match.replace(/[\s.-]/g, '')) ? '[DNI]' : match)
     .replace(/(?<!\w)(?:\+?34[\s.-]?)?[6789](?:[\s.-]?\d){8}(?!\d)/g, '[TELEFONO]')
     .replace(/\b[\w.+-]+@[\w.-]+\.[A-Z]{2,}\b/gi, '[EMAIL]')
     .replace(/https?:\/\/\S+|\bwww\.\S+/gi, '[ENLACE]')
@@ -93,7 +109,7 @@ const OPTION_EVENT: Record<ReplyButtonId, EventType> = {
 };
 
 const PHRASES: Record<ReplyButtonId, readonly string[]> = {
-  HAS_CERT_YES: ['si', 'si lo tengo', 'tengo certificado', 'dispongo de certificado', 'tengo el certificado'],
+  HAS_CERT_YES: ['si', 'si tengo', 'si lo tengo', 'tengo certificado', 'dispongo de certificado', 'tengo el certificado'],
   HAS_CERT_NO: ['no', 'no lo tengo', 'no tengo certificado', 'sin certificado', 'no dispongo de certificado', 'tengo clave', 'solo tengo clave', 'cl@ve'],
   DEVICE_PC: ['pc', 'ordenador', 'computador', 'en el ordenador', 'en pc', 'ya esta en el pc', 'ya lo tengo en pc'],
   DEVICE_MOBILE: ['movil', 'telefono', 'en el movil', 'en mi movil', 'en el telefono'],
@@ -151,7 +167,7 @@ function allowedOptions(expediente: Pick<BotApodExpediente, 'currentState' | 'ha
 }
 
 function isPromptInjection(text: string): boolean {
-  return /(?:ignore|ignora|olvida).*(?:previous|anteriores?|instrucciones?|prompt|sistema)|(?:system|developer)\s+prompt|(?:actua|act as|pretend|hazte pasar)|(?:override|jailbreak)|<\/?(?:system|developer)>|api\s*key|clave\s+secreta|\[\[handoff:/.test(text);
+  return /(?:ignore|ignora|olvida).*(?:previous|anteriores?|instrucciones?|prompt|sistema)|(?:system|developer)\s+prompt|\bactua\s+(?:como|de)\b|\bact as\b|\bpretend\b|hazte pasar|(?:override|jailbreak)|<\/?(?:system|developer)>|api\s*key|clave\s+secreta|\[\[handoff:/.test(text);
 }
 
 /** These inputs must never be reinterpreted as an action by a model. */
@@ -174,7 +190,16 @@ export function classifyClientText(
   if (!options.length) return { kind: 'HUMAN_REVIEW', reason: 'UNSUPPORTED_TEXT' };
   const explicitStop = /\b(?:stop|parar|cancelar|no me escribas|no quiero seguir)\b/.test(normalized);
   if (explicitStop) return { kind: 'HUMAN_REVIEW', reason: 'UNSUPPORTED_TEXT' };
-  const plain = normalized.replace(/[.,;:!?¿¡]/g, ' ').replace(/\s+/g, ' ').trim();
+  let plain = normalized.replace(/[.,;:!?¿¡]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Clients correct themselves mid-message: "sí tengo certificado, no espera, no tengo".
+  // What counts is what they said after the correction, not before it.
+  const correction = /\b(?:no espera|espera|perdon|perdona|perdona no|mejor dicho|queria decir|quise decir|me equivoque|rectifico|es decir|o sea no|digo)\b/g;
+  let lastCorrection = -1;
+  for (const match of plain.matchAll(correction)) lastCorrection = match.index! + match[0].length;
+  if (lastCorrection > 0) {
+    const tail = plain.slice(lastCorrection).trim();
+    if (tail.length >= 2) plain = tail;
+  }
   // Brief answers refer to the persisted question, never to consent or document approval.
   // Also accept an unfinished "i" followed immediately by the client's correction.
   const brief=plain.replace(/^i (?=si$|yes$)/,'');
@@ -192,17 +217,40 @@ export function classifyClientText(
   if(options.includes('HAS_CERT_NO')&&/^no (?:tengo|dispongo de) (?:nada de eso|ni (?:el )?certificado|ni (?:la )?cl(?:a|@)ve)(?: |$)|(?:^| )ni (?:el )?certificado(?: digital)? ni (?:la )?cl(?:a|@)ve(?: |$)/.test(plain)){
     return {kind:'OPTION',optionId:'HAS_CERT_NO',eventType:OPTION_EVENT.HAS_CERT_NO,confidence:'NORMALIZED'};
   }
+  // A bare "no tengo" answers the pending question; with a noun after it, it does not.
+  if (/^(?:no,? )?no tengo$/.test(plain) && options.includes('HAS_CERT_NO')) {
+    return ConversationClassificationSchema.parse({ kind: 'OPTION', optionId: 'HAS_CERT_NO', eventType: OPTION_EVENT.HAS_CERT_NO, confidence: 'NORMALIZED' });
+  }
   const exact = options.filter(option => PHRASES[option].includes(plain));
   // Short answers such as "si" and "no" must be whole answers, never
   // substrings of a question. A negative answer cannot match a positive
   // phrase embedded inside it ("no tengo ordenador").
+  const matchedLength = new Map<ReplyButtonId, number>();
   const matches = exact.length ? exact : options.filter(option => PHRASES[option].some(phrase => {
     if (phrase.length <= 2 || (/^no\b/.test(plain) && !/^no\b/.test(phrase))) return false;
     const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const match = new RegExp(`(?:^|\\s)${escaped}(?=$|\\s)`).exec(plain);
     if (!match) return false;
-    return !/(?:^|\s)no\s*$/.test(plain.slice(0, match.index));
+    matchedLength.set(option, Math.max(matchedLength.get(option) ?? 0, phrase.length));
+    // "todavía no está revocado" denies the action even though "no" is not the previous word.
+    return !/\b(?:no|nunca|jamas|tampoco|sin)\b[^.!?;]{0,25}$/.test(plain.slice(0, match.index));
   }));
+  // Clients answer in bursts: "sí, tengo certificado" + "está en el ordenador" arrive merged.
+  // Saying yes and naming the device is one coherent answer, so the device wins; anything else
+  // with several matches stays ambiguous and is asked again.
+  // Prefer the most specific phrase before treating several matches as ambiguous.
+  if (matches.length > 1 && matchedLength.size) {
+    const longest = Math.max(...matches.map(option => matchedLength.get(option) ?? 0));
+    const specific = matches.filter(option => (matchedLength.get(option) ?? 0) === longest);
+    if (specific.length === 1 && longest > 0) {
+      const optionId = specific[0]!;
+      if (!SECURE_BUTTON_ONLY.has(optionId)) return ConversationClassificationSchema.parse({ kind: 'OPTION', optionId, eventType: OPTION_EVENT[optionId], confidence: 'NORMALIZED' });
+    }
+  }
+  const resolved = matches.length === 2 && matches.includes('HAS_CERT_YES')
+    ? matches.find(option => option === 'DEVICE_PC' || option === 'DEVICE_MOBILE')
+    : undefined;
+  if (resolved) return ConversationClassificationSchema.parse({ kind: 'OPTION', optionId: resolved, eventType: OPTION_EVENT[resolved], confidence: 'NORMALIZED' });
   if (matches.length !== 1) return { kind: 'HUMAN_REVIEW', reason: matches.length > 1 ? 'AMBIGUOUS_TEXT' : 'UNSUPPORTED_TEXT' };
   const optionId = matches[0]!;
   if (SECURE_BUTTON_ONLY.has(optionId)) return { kind: 'HUMAN_REVIEW', reason: 'BUTTON_REQUIRED' };

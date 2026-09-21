@@ -19,12 +19,28 @@ function topic(text:string):string|null {
   return 'unknown';
 }
 
+/**
+ * Thinking aloud and then answering is one turn, not two.
+ * "mm no sé" followed by "yo creo que la primera" arrived as two model runs and produced two
+ * conflicting replies in the manager's test on 18 September.
+ */
+function continuation(text:string):boolean {
+  const n=normalize(text).trim();
+  if(/^(?:mmm*|ehh*|pff+|bueno|a ver|espera|pues)\b/.test(n))return true;
+  if(/\bno se\b|\bni idea\b|\bduda\b|\bcreo que\b|\bsupongo\b|\bquiza(?:s)?\b|\btal vez\b/.test(n))return true;
+  // Relative references only mean something next to the message before them.
+  if(/\b(?:la|el|lo) (?:primera|primero|segunda|segundo|ultima|ultimo)\b|\besa opcion\b|\beste\b|\besa\b|\beso\b/.test(n))return true;
+  return n.split(/\s+/).length<=4;
+}
+
 export function relatedConversationText(group:readonly string[],next:string):boolean {
   if(requiresDeterministicHandoff(next)||group.some(requiresDeterministicHandoff))return false;
   if(/\b(?:otra cosa|otro tema|por otro lado|cambiando de tema|by the way|another question|unrelated)\b/.test(normalize(next)))return false;
   const nextTopic=topic(next);
   const previous=group.map(topic).filter((t):t is string=>t!==null);
   if(nextTopic===null)return true;
+  // A hesitation or a short relative answer belongs to the message it follows, whatever its topic.
+  if(nextTopic==='unknown'&&group.length>0&&continuation(next))return true;
   if(previous.length===0)return nextTopic!=='unknown';
   return nextTopic!=='unknown'&&previous.every(t=>t===nextTopic);
 }

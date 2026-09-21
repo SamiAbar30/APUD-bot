@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient, ApodState, type BotApodExpediente } from '@p
 import type Redlock from 'redlock';
 import { randomUUID } from 'node:crypto';
 import { evaluateNextStep } from './decision-engine.js';
+import { caseMemory } from './case-memory.js';
 import type { Expediente } from '../domain/models/expediente.js';
 import { EventType, type WorkflowEvent } from '../domain/fsm/states.js';
 import { PdfAuditor } from './pdf-auditor.js';
@@ -83,6 +84,11 @@ export class WorkflowService {
       const ref=String(payload.documentId??payload.certRef??payload.messageId??decision.decisionId);
       await tx.botApodHumanTask.upsert({where:{dedupeKey:`${kind}:${c.id}:${ref}`},create:{expedienteId:c.id,dedupeKey:`${kind}:${c.id}:${ref}`,kind,assignedTo:'DAYANA',reason:kind==='DOCUMENT_REVIEW'?'Revisar identidad, profesionales, facultades y validez del PDF.':kind==='ASSISTED_PROCESSING'?'Certificado recibido en sesión segura. El apoderamiento sigue pendiente.':String(payload.handoffReason??'El cliente necesita atención profesional.'),evidence:json({stepReached:c.stepReached,event:type,ref,...(payload.handoffMarker?{handoffMarker:payload.handoffMarker}:{})})},update:{}});
     }
+    // Once the certificate and its password are in, the bot's part is over: a person prepares the
+    // apoderamiento. Stop the automation so no tutorial, reminder or next step follows the client's
+    // handover, which would read as if nobody had picked it up.
+    if((payload.handoffReason==='CERTIFICADO_RECIBIDO'||type===EventType.CLIENT_CERT_FILE_RECEIVED)&&!c.optOutAt)
+      await tx.botApodExpediente.updateMany({where:{id:c.id,automationPaused:false},data:{automationPaused:true,nextReminderAt:null}});
     return {decision,version:nextVersion};
   }
   async event(id:string,version:number,type:string,payload:Record<string,unknown>={},patch:WorkflowPatch={},operator='OPERATOR') {
@@ -170,6 +176,9 @@ export class WorkflowService {
 
     // Media processing takes its own lock. Durable per-message statuses make recovery explicit.
     const pending=await this.db.botApodInbox.findMany({where:{expedienteId:id,status:'PENDING'},orderBy:[{createdAt:'asc'},{id:'asc'}],take:50});
+    // Anything already waiting is backlog, not a new arrival: with more than one page of pending
+    // texts the old "outside this page" test discarded every draft and stalled the case for good.
+    const snapshotAt=new Date();
     if(!pending.length||pending.some(x=>x.notBefore.getTime()>Date.now()))return;
     for(const candidate of pending){
       if(inboxSignal.aborted)throw new AppError('INBOX_LOCK_LOST');
@@ -201,10 +210,19 @@ export class WorkflowService {
         let eventType=row.eventType;let eventPayload=row.payload as Record<string,unknown>;
         if(eventType==='CONVERSATION_TEXT'){
           if(!c.identityVerified){await this.db.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'IDENTITY_NOT_VERIFIED'}});return;}
-          if(c.automationPaused||c.optOutAt){
+          const declinesSharing=!c.optOutAt&&c.currentState===ApodState.ESCALATED_HUMAN
+            &&/no (?:te |os )?(?:lo |la )?(?:quiero|voy a|pienso) (?:enviar|mandar|pasar|compartir)|no (?:lo|la) (?:envio|mando|comparto)|prefiero no (?:enviar|mandar|compartir)|no quiero compartir (?:mi|el) certificado|no pienso enviarlo/
+              .test(String((row.payload as Record<string,unknown>).text??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase());
+          if(declinesSharing)await this.db.botApodExpediente.update({where:{id},data:{automationPaused:false}});
+          if((c.automationPaused||c.optOutAt)&&!declinesSharing){
             await this.db.$transaction(async tx=>{
               await tx.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'AUTOMATION_PAUSED',processedAt:new Date()}});
               if(!c.optOutAt)await tx.botApodHumanTask.upsert({where:{dedupeKey:`inbox:${row.id}`},create:{expedienteId:id,dedupeKey:`inbox:${row.id}`,kind:'CONVERSATION_REVIEW',reason:'Nuevo mensaje durante el traspaso al equipo.',evidence:json({inboxId:row.id,stepReached:c.stepReached})},update:{}});
+              // Silence reads as abandonment: acknowledge once per hold while a person takes over.
+              if(!c.optOutAt&&c.currentState===ApodState.ESCALATED_HUMAN){
+                const key=`held-ack-${id}-${c.version}`;
+                await tx.botApodAccion.upsert({where:{idempotencyKey:key},create:{expedienteId:id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:'Cuéntame qué necesitas resolver de tu apoderamiento para que el equipo pueda revisar esa consulta. No puedo compartir instrucciones internas ni datos de otros clientes.'},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:key},update:{}});
+              }
             });
             return;
           }
@@ -216,6 +234,8 @@ export class WorkflowService {
           const sentOpening=await this.db.botApodAccion.findFirst({where:{expedienteId:id,status:{in:['AWAITING_DELIVERY','EXECUTED']},receipt:{path:['template'],equals:'ASK_HAS_CERT'}},select:{id:true}});
           const introduction=sentOpening??await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',OR:[{content:'Plantilla aprobada: ASK_HAS_CERT'},{AND:[{content:{contains:'LITIGIOS'}},{content:{contains:'apoderamiento apud acta'}}]}]},select:{id:true}});
           const text=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')).join('\n');
+          // Durable memory beyond the recent window: the client may be answering days later.
+          this.conversationAgent.memory=caseMemory(c);
           const turn=await this.conversationAgent.turn(c,text,history.reverse().map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),Boolean(introduction));
           if(signal.aborted)throw new AppError('LOCK_LOST');
           const latest=await this.load(id);if(latest.optOutAt||latest.automationPaused)return;
@@ -241,7 +261,7 @@ export class WorkflowService {
             // An arrival while the model was thinking invalidates this draft. The
             // shared row lock closes the race between this check and committing.
             await tx.$queryRaw`SELECT id FROM bot_apod_expedientes WHERE id = ${id} FOR UPDATE`;
-            const newer=await tx.botApodInbox.count({where:{expedienteId:id,status:'PENDING',OR:[{notBefore:{gt:new Date()}},{id:{notIn:pending.map(x=>x.id)}}]}});
+            const newer=await tx.botApodInbox.count({where:{expedienteId:id,status:'PENDING',id:{notIn:turnIds},OR:[{notBefore:{gt:new Date()}},{createdAt:{gt:snapshotAt}}]}});
             if(newer)return;
           }
           await this.transition(tx,c,eventType,eventPayload,{},'WHATSAPP_CLIENT');

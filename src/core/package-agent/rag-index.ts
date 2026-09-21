@@ -4,6 +4,8 @@ import {digest,keywordRank,type AgentPackage,type Example} from './package.js';
 
 export const RAG_EMBEDDING_MODEL='text-embedding-3-small';
 export const RAG_INDEX_DIR='.runtime/rag';
+/** Shortened embeddings: much less memory per example, with the quality checked by eval:retrieval. */
+export const RAG_DIMENSIONS=Number(process.env.RAG_DIMENSIONS??512);
 const BATCH=256;
 
 /**
@@ -14,15 +16,15 @@ export function embeddingText(client:string):string{
   return `Cliente: ${client.replace(/\s+/g,' ').trim().slice(0,700)}`;
 }
 
-export interface Embedder{readonly model:string;embed(texts:readonly string[]):Promise<{vectors:Float32Array[];tokens:number}>}
+export interface Embedder{readonly model:string;embed(texts:readonly string[],dimensions?:number):Promise<{vectors:Float32Array[];tokens:number}>}
 
 /** OpenAI-compatible /embeddings client. Vectors are L2-normalised so a dot product is cosine similarity. */
 export class OpenAIEmbedder implements Embedder{
-  constructor(private readonly baseUrl:string,private readonly apiKey:string,readonly model=RAG_EMBEDDING_MODEL,private readonly timeoutMs=8000){}
-  async embed(texts:readonly string[]){
+  constructor(private readonly baseUrl:string,private readonly apiKey:string,readonly model=RAG_EMBEDDING_MODEL,private readonly timeoutMs=8000,private readonly dimensions=RAG_DIMENSIONS){}
+  async embed(texts:readonly string[],dimensions=this.dimensions){
     const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),this.timeoutMs);
     try{
-      const response=await fetch(`${this.baseUrl.replace(/\/+$/,'')}/embeddings`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${this.apiKey}`},body:JSON.stringify({model:this.model,input:texts}),signal:controller.signal,redirect:'error'});
+      const response=await fetch(`${this.baseUrl.replace(/\/+$/,'')}/embeddings`,{method:'POST',headers:{'content-type':'application/json',authorization:`Bearer ${this.apiKey}`},body:JSON.stringify({model:this.model,input:texts,...(dimensions?{dimensions}:{})}),signal:controller.signal,redirect:'error'});
       if(!response.ok)throw new Error(`EMBEDDINGS_HTTP_${response.status}`);
       const body=await response.json() as {data?:Array<{index:number;embedding:number[]}>;usage?:{total_tokens?:number}};
       const rows=[...(body.data??[])].sort((a,b)=>a.index-b.index);
@@ -102,17 +104,29 @@ export type RetrievalMethod='RAG'|'KEYWORD';
 export class ExampleRetriever{
   readonly metrics={rag:0,keywordFallback:0};
   private loaded?:Promise<RagLoad>;
+  private checkedAt=0;
+  /** A missing or stale index is rechecked, so a rebuilt index is picked up without a restart. */
+  private static readonly RECHECK_MS=5*60*1000;
   constructor(private readonly pkg:AgentPackage,private readonly embedder:Embedder|null){}
 
   status():Promise<RagLoad['status']|'DISABLED'>{return this.embedder?this.load().then(r=>r.status):Promise.resolve('DISABLED');}
-  private load(){return this.loaded??=RagIndex.load(this.pkg,this.embedder!.model);}
+  private load():Promise<RagLoad>{
+    if(this.loaded&&Date.now()-this.checkedAt<ExampleRetriever.RECHECK_MS)return this.loaded;
+    const pending=this.loaded;
+    if(pending)return pending.then(current=>current.status==='LOADED'?current:this.reload());
+    return this.reload();
+  }
+  private reload():Promise<RagLoad>{
+    this.checkedAt=Date.now();
+    return this.loaded=RagIndex.load(this.pkg,this.embedder!.model);
+  }
 
   async examples(clientText:string,limit=5):Promise<{examples:Example[];method:RetrievalMethod}>{
     if(this.embedder){
       const rag=await this.load();
       if(rag.status==='LOADED'){
         try{
-          const {vectors:[query]}=await this.embedder.embed([embeddingText(clientText)]);
+          const {vectors:[query]}=await this.embedder.embed([embeddingText(clientText)],rag.index.meta.dims);
           this.metrics.rag++;
           return {examples:distinctExamples(this.pkg.examples,rag.index.rank(query!,limit*4),limit),method:'RAG'};
         }catch{/* fall through to keyword retrieval */}

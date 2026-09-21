@@ -22,14 +22,14 @@ const embedder=new OpenAIEmbedder(ai.config.baseUrl,ai.config.apiKey,RAG_EMBEDDI
 
 // Staff replies are embedded once (cached) so retrieved replies can be compared with the real one.
 const replies=[...new Set(pkg.examples.map(e=>e.assistant))];
-const cacheFile=resolve(RAG_INDEX_DIR,`replies-${RAG_EMBEDDING_MODEL}.f32`);const cacheMeta=cacheFile+'.json';const repliesDigest=digest(replies.join('\0'));
+const cacheFile=resolve(RAG_INDEX_DIR,`replies-${RAG_EMBEDDING_MODEL}-${rag.index.meta.dims}.f32`);const cacheMeta=cacheFile+'.json';const repliesDigest=digest(replies.join('\0'));
 let replyVectors:Float32Array[]=[];
 try{
   const meta=JSON.parse(await readFile(cacheMeta,'utf8'));const bytes=await readFile(cacheFile);
   if(meta.digest===repliesDigest){const all=new Float32Array(bytes.buffer.slice(bytes.byteOffset,bytes.byteOffset+bytes.length));replyVectors=replies.map((_,i)=>all.subarray(i*meta.dims,(i+1)*meta.dims));}
 }catch{/* built below */}
 if(!replyVectors.length){
-  for(let i=0;i<replies.length;i+=256)replyVectors.push(...(await embedder.embed(replies.slice(i,i+256))).vectors);
+  for(let i=0;i<replies.length;i+=256)replyVectors.push(...(await embedder.embed(replies.slice(i,i+256),rag.index.meta.dims)).vectors);
   const dims=replyVectors[0]!.length;const all=new Float32Array(replies.length*dims);replyVectors.forEach((v,i)=>all.set(v,i*dims));
   await mkdir(resolve(RAG_INDEX_DIR),{recursive:true});await writeFile(cacheFile,Buffer.from(all.buffer),{mode:0o600});await writeFile(cacheMeta,JSON.stringify({digest:repliesDigest,dims}),{mode:0o600});
 }

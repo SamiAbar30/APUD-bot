@@ -352,6 +352,7 @@ function guidedHelp(ctx: Ctx): TransitionResult {
     note:'Repeated guided attempts exhausted; offer court or partner alternatives',
     patch:{digitalHelpAttempts:attempts,certificateHelpAttempts:copyAttempts},
   });
+  if (hasCert && ctx.payload.copyLocated === true) return toConsentRequest(ctx, 'Client located the certificate copy: ask for consent to prepare it for them');
   if (!hasCert && ctx.exp.hasDigitalCert === false && attempts >= 3 && failed) return fallback();
   if (hasCert && (copyAttempts > 0 || attempts >= 3 || ctx.type === EventType.CLIENT_HAS_NO_PC)) {
     if (copyAttempts >= 3 && failed) return fallback();
@@ -431,6 +432,14 @@ function triageAnswer(ctx: Ctx): TransitionResult | undefined {
       return toCourtFallback(ctx, TemplateId.COURT_POWER_CHECKLIST, 'Client cannot obtain a certificate: send the personalised court checklist');
     case EventType.CLIENT_REQUESTS_URGENT_PAID:
       return toApudataPreapproval(ctx);
+    case EventType.CLIENT_CONSENT_DENIED:
+      // Refusing to hand over the certificate is not a dead end: the court and partner routes
+      // remain open, so triage and the mobile states offer them instead of stalling.
+      return decide(ctx, State.FALLBACK_OPTIONS, buttons(TemplateId.FALLBACK_OPTIONS, [ReplyButton.COURT_APPOINTMENT, ReplyButton.APUDATA_REQUEST, ReplyButton.HUMAN_HELP]), {
+        discard: true,
+        note: 'Client will not share the certificate: offer the court and partner routes',
+        patch: { consentGranted: false, consentGrantedAt: null },
+      });
     default:
       return undefined;
   }

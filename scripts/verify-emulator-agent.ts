@@ -21,7 +21,7 @@ try{
   // A fresh first contact already shows the presentation; sending it again makes the chat look resumed.
   const last=await db.botApodMessage.findFirst({where:{expedienteId:c.id},orderBy:[{createdAt:'desc'},{id:'desc'}]});
   let action:{id:string}|null=null;
-  if(!(last?.role==='assistant'&&/¿Tienes certificado digital\?/.test(last.content))){
+  if(!(last?.role==='assistant'&&/¿Tienes certificado digital( a tu nombre)?\?/.test(last.content))){
     // Re-send the presentation requested by the user, without deleting history or resetting state.
     // One key per run: a reused key returns the old EXECUTED action and nothing reaches a restarted bridge.
     const key=`operator-presentation-gpt-context-${Date.now()}`;
@@ -33,7 +33,7 @@ try{
     const id=action.id;
     await waitFor(async()=>{const a=await db.botApodAccion.findUniqueOrThrow({where:{id}});if(['BLOCKED','FAILED','HUMAN_REQUIRED'].includes(a.status))throw new Error(a.lastError??a.status);return ['AWAITING_DELIVERY','EXECUTED'].includes(a.status)?a:null;},'PRESENTATION');
   }
-  await page.getByText(/¿Tienes certificado digital\?/).first().waitFor();
+  await page.getByText(/¿Tienes certificado digital( a tu nombre)?\?/).first().waitFor();
   const before=new Date();
   // Actual greeting reported by the user in this task; no fabricated client record.
   await page.getByPlaceholder('Type a message...').fill('hola');await page.getByPlaceholder('Type a message...').press('Enter');

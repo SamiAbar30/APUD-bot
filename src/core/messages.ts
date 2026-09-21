@@ -20,11 +20,12 @@ const revocationText=`El despacho te indicará qué poder debe corregirse y qué
 type Renderer=(c:BotApodExpediente,consentVersion?:string,variables?:TemplateVariables)=>OutgoingGuide;
 
 export function firstContactText(_c?:BotApodExpediente):string {
-  return 'Hola, soy Dayana, la asistente virtual de LITIGIOS, el despacho de abogados. Te ayudaré paso a paso a hacer el apoderamiento apud acta para representarte en la reclamación; otorgarlo en la Sede Judicial es gratuito si lo haces por tu cuenta. ¿Tienes certificado digital a tu nombre?';
+  // WhatsApp length: identity, reason, cost and the question, without a paragraph of preamble.
+  return 'Hola, soy Dayana, la asistente virtual de LITIGIOS. Te escribo por el apoderamiento apud acta de tu reclamación: es gratuito si lo haces por tu cuenta y te guío yo paso a paso. ¿Tienes certificado digital a tu nombre?';
 }
 
 /** A greeting or incomplete answer keeps the actual pending step, without a handoff. */
-export function pendingConversationText(c:Pick<BotApodExpediente,'currentState'|'hasDigitalCert'> & {certificateHelpAttempts?:number}):string|null {
+export function pendingConversationText(c:Pick<BotApodExpediente,'currentState'|'hasDigitalCert'> & {certificateHelpAttempts?:number;dni?:string}):string|null {
   if((c.certificateHelpAttempts??0)>0&&['PC_TUTORIAL_SENT','WAITING_PDF_SUBMISSION','MOBILE_TRIAGE_PC_CHECK','MOBILE_EXPORT_GUIDE_SENT'].includes(c.currentState))return 'Seguimos con la copia de tu certificado para ayudarte con el apoderamiento. ¿Has podido localizarla en el dispositivo donde la instalaste?';
   switch(c.currentState){
     case 'INITIAL_TRIAGE':
@@ -33,7 +34,9 @@ export function pendingConversationText(c:Pick<BotApodExpediente,'currentState'|
     case 'MOBILE_EXPORT_GUIDE_SENT': return 'El siguiente paso es pasar el certificado del móvil al ordenador siguiendo la guía anterior. Avísame cuando esté instalado o si necesitas ayuda.';
     case 'PC_TUTORIAL_SENT':
     case 'WAITING_PDF_SUBMISSION': return 'Sigue la guía para hacer el apoderamiento desde el ordenador y envíanos el PDF completo cuando termines. Si algún paso te da problemas, cuéntamelo.';
-    case 'CERT_ACQUISITION_LINKS_SENT': return 'Seguimos con la obtención del certificado digital. ¿En qué paso de la solicitud te has quedado?';
+    case 'CERT_ACQUISITION_LINKS_SENT': return /^[XYZ]/i.test(c.dni??'')
+      ? 'Seguimos con tu certificado digital: con NIE se pide cita en el Ayuntamiento. ¿Has podido pedir la cita?'
+      : 'Seguimos con tu certificado digital. ¿Has empezado con el DNI electrónico o con la vídeo identificación?';
     case 'FALLBACK_OPTIONS': return '¿Prefieres hacerlo por tu cuenta en el juzgado, gratis, o consultar la gestión opcional de pago con la empresa colaboradora?';
     case 'COURT_FALLBACK_GUIDE_SENT': return 'Seguimos con el apoderamiento en el juzgado. Si ya lo has hecho, envíanos el justificante PDF completo para revisarlo; si te falta algún paso, cuéntamelo.';
     default:return null;
@@ -42,19 +45,18 @@ export function pendingConversationText(c:Pick<BotApodExpediente,'currentState'|
 
 /** Explicit action templates distinguish questions that share the same FSM state. */
 const templates:Record<TemplateId,Renderer>={
-  [TemplateId.FALLBACK_OPTIONS]:()=>({text:`Puedes hacer el apoderamiento por tu cuenta en el juzgado, gratis. ${PARTNER_COST} ¿Cuál prefieres?`,buttons:[{id:'COURT_APPOINTMENT',title:'Juzgado · gratis'},{id:'APUDATA_REQUEST',title:'Gestión de pago'},help]}),
+  [TemplateId.FALLBACK_OPTIONS]:()=>({text:'Tienes dos formas de terminarlo sin enviarnos nada.\n\nEn el juzgado: pides cita en el decanato de tu ciudad y acudes con tu DNI o NIE; es gratis y lo firmas allí. La empresa colaboradora es la vía opcional y de pago: lo tramita por ti, con una referencia de 35 € que confirmamos antes de contratar. ¿Cuál prefieres?',buttons:[{id:'COURT_APPOINTMENT',title:'Juzgado · gratis'},{id:'APUDATA_REQUEST',title:'Gestión de pago'},help]}),
   [TemplateId.FOLLOWUP_DAY3]:c=>({text:followUpText(c,3),buttons:[help]}),
   [TemplateId.FOLLOWUP_DAY7]:c=>({text:followUpText(c,7),buttons:[help]}),
   [TemplateId.FOLLOWUP_DAY15]:c=>({text:followUpText(c,15),buttons:[help]}),
   [TemplateId.ASK_HAS_CERT]:(c)=>({text:firstContactText(c)}),
   [TemplateId.ASK_CERT_DEVICE]:()=>({text:'¿Lo tienes en el móvil o en el ordenador?',buttons:deviceButtons}),
-  [TemplateId.ASK_HAS_PC]:()=>({text:'Para firmar el apoderamiento necesitas el certificado en un ordenador; desde el móvil no se puede firmar. ¿Tienes un ordenador donde puedas instalarlo?',buttons:[{id:'HAS_PC',title:'Tengo ordenador'},{id:'NO_PC',title:'No tengo ordenador'},{id:'NEEDS_ASSISTANCE',title:'Necesito asistencia'}]}),
-  [TemplateId.MOBILE_EXPORT_GUIDE]:()=>({text:'Utiliza la opción de copia de seguridad o exportación de tu aplicación de certificado. Protege la copia con su contraseña e instálala en tu ordenador siguiendo las instrucciones de la aplicación. Conserva ambos de forma segura. Si necesitas ayuda, el gestor te indicará cómo continuar.',buttons:[{id:'DEVICE_PC',title:'Ya está en el PC'},{id:'NEEDS_ASSISTANCE',title:'Necesito asistencia'}]}),
-  [TemplateId.ASSIST_CONSENT_REQUEST]:(_c,consentVersion)=>{
-    if(!consentVersion?.trim())throw new AppError('CONSENT_TEXT_NOT_APPROVED');
-    return {text:`Podemos ayudarte a preparar el borrador del apoderamiento bajo revisión del despacho. El uso del certificado debe estar limitado a este trámite y a tu consentimiento expreso (${consentVersion}). La preparación asistida no supone por sí sola otorgar o revocar poderes. El gestor te indicará el canal autorizado para el certificado. ¿Autorizas esta asistencia?`,buttons:[{id:'CONSENT_YES',title:'Autorizo asistencia'},{id:'CONSENT_NO',title:'No autorizo'}]};
-  },
-  [TemplateId.ASSIST_SEND_CERT_INSTRUCTIONS]:()=>({text:'El gestor te facilitará el canal seguro para la sesión de asistencia. Utilízalo para aportar tu copia del certificado y su contraseña. La sesión se limitará a preparar el borrador que deberás revisar.',buttons:[{id:'CONSENT_NO',title:'Retirar permiso'},help]}),
+  [TemplateId.ASK_HAS_PC]:()=>({text:'Desde el móvil no se puede firmar, hace falta un ordenador. ¿Tienes uno a mano?',buttons:[{id:'HAS_PC',title:'Tengo ordenador'},{id:'NO_PC',title:'No tengo ordenador'},{id:'NEEDS_ASSISTANCE',title:'Necesito asistencia'}]}),
+  [TemplateId.MOBILE_EXPORT_GUIDE]:()=>({text:'Abre la aplicación del certificado y usa «copia de seguridad» o «exportar»: te pedirá ponerle una contraseña al archivo. Luego lo instalas en el ordenador, o si lo prefieres me lo mandas por aquí con esa contraseña y lo hago yo.',buttons:[{id:'DEVICE_PC',title:'Ya está en el PC'},{id:'NEEDS_ASSISTANCE',title:'Necesito asistencia'}]}),
+  // The client cannot do it alone, so the office does it. Said the way a person would say it,
+  // and the yes/no button is what records the client's permission.
+  [TemplateId.ASSIST_CONSENT_REQUEST]:()=>({text:'No te preocupes, eso lo hago yo por ti. Necesito el archivo de tu certificado y su contraseña, y lo uso solo para este apoderamiento. ¿Me los mandas por aquí?',buttons:[{id:'CONSENT_YES',title:'Sí, te los mando'},{id:'CONSENT_NO',title:'Prefiero que no'}]}),
+  [TemplateId.ASSIST_SEND_CERT_INSTRUCTIONS]:()=>({text:'Genial. Mándame el archivo del certificado, que suele ser .p12 o .pfx, y en el mismo mensaje su contraseña. Con eso lo preparo y te aviso cuando esté hecho.',buttons:[{id:'CONSENT_NO',title:'Mejor no'},help]}),
   [TemplateId.ASSIST_CERT_PASSWORD_INVALID]:()=>({text:'No hemos podido abrir la copia del certificado con la contraseña facilitada. Comprueba la contraseña y vuelve a aportarla exclusivamente en el canal seguro de asistencia indicado por el gestor.',buttons:[help]}),
   [TemplateId.ASSIST_CERT_UNUSABLE]:()=>({text:'La copia del certificado aportada no puede utilizarse para esta asistencia. El gestor revisará contigo el formato, la identidad y las opciones para continuar.',buttons:[help]}),
   [TemplateId.ASSIST_CERT_EXPIRED]:()=>({text:'La inspección del certificado indica que está fuera de su período de validez. Consulta con el gestor la renovación o una vía alternativa para el apoderamiento.',buttons:[{id:'COURT_APPOINTMENT',title:'Vía presencial'},help]}),
@@ -62,12 +64,14 @@ const templates:Record<TemplateId,Renderer>={
     if(!c.documentId)throw new AppError('DRAFT_DOCUMENT_REQUIRED');
     return {text:'Te enviamos el borrador para revisión. Comprueba tu identidad, los profesionales designados y las facultades solicitadas. Indica si los datos son correctos o si necesita cambios. Tu respuesta confirma la revisión del borrador; el otorgamiento requiere el trámite correspondiente.',attachment:'STORED_DOCUMENT',buttons:[{id:'DRAFT_APPROVED',title:'Revisado y conforme'},{id:'DRAFT_REJECTED',title:'Necesita corrección'}]};
   },
-  [TemplateId.PC_TUTORIAL]:()=>({text:`Perfecto, te paso la guía y el listado de procuradores y abogados. Necesitas AutoFirma instalado en el ordenador: https://firmaelectronica.gob.es/Home/Descargas.htm\n\nAbre ${officialLinks.sede} en modo incógnito y entra por Certificado Digital. Cuando termines, envíanos el PDF completo para revisarlo.`,attachment:'TUTORIAL'}),
+  [TemplateId.PC_TUTORIAL]:()=>({text:`Perfecto. Te paso la guía con los datos de nuestros procuradores: los necesitarás para rellenar el formulario.\n\nHazlo en el ordenador donde tienes el certificado: instala AutoFirma (https://firmaelectronica.gob.es/Home/Descargas.htm) y entra en ${officialLinks.sede} por «Certificado Digital». Cuando lo termines, mándame el PDF y lo revisamos. Y si prefieres no hacerlo tú, mándame el archivo de tu certificado con su contraseña y lo hago yo por ti.`,attachment:'TUTORIAL'}),
   [TemplateId.DIGITAL_STEP_HELP]:(c,_version,variables)=>{
     const topic=variables?.helpTopic;
     if(c.hasDigitalCert===null)return {text:`${variables?.guidanceDocumentType==='NIE'?'Entendido, tienes NIE. ':''}Claro, te ayudo a hacerlo paso a paso. Para empezar, ¿tienes un certificado digital a tu nombre?`};
     if(!c.hasDigitalCert){
-      if(variables?.guidanceDocumentType==='NIE'||variables?.guidanceDocumentType!=='DNI'&&/^[XYZ]/.test(c.dni))return {text:`Entendido, tienes NIE. Te ayudo con esa vía.\n\nVamos con el certificado FNMT: primero revisa la solicitud y la acreditación de identidad en ${officialLinks.fnmtOffice}; la oficina debe estar habilitada. ¿Ya tienes el código de solicitud para acreditar tu identidad?`};
+      if(variables?.guidanceDocumentType==='NIE'||variables?.guidanceDocumentType!=='DNI'&&/^[XYZ]/.test(c.dni))return {text:(c.digitalHelpAttempts??0)<=1
+        ?'Pide cita en tu Ayuntamiento, oficina de acreditación de la FNMT, para identificarte con tu NIE. Allí te entregan un documento con un enlace y una contraseña para descargar el certificado en tu ordenador.'
+        :'En el Ayuntamiento te entregan un documento con un enlace y una contraseña para descargar el certificado en tu propio ordenador. Cuéntame en qué paso te has quedado.'};
       return {text:(c.digitalHelpAttempts??0)<=1?`Vamos paso a paso con tu certificado: abre la información de la FNMT para solicitarlo con DNIe (${officialLinks.fnmtDnie}) o mediante vídeo identificación (${officialLinks.fnmtVideo}), que tiene su propio coste. ¿Qué vía estás intentando utilizar?`:'Seguimos con la solicitud del certificado. Dime en qué paso te detienes y el texto del error, sin incluir códigos ni datos personales, para indicarte cómo continuar.'};
     }
     if(topic==='DOWNLOAD')return {text:'Si ya firmaste el apoderamiento, vuelve a la Sede Judicial y consulta tus apoderamientos vigentes en calidad de poderdante. Abre el poder y busca la descarga del justificante completo. ¿Consigues ver el apoderamiento en la consulta?'};
@@ -75,9 +79,24 @@ const templates:Record<TemplateId,Renderer>={
     if(c.certDevice==='MOBILE')return {text:'Vamos a localizar la copia del certificado en la aplicación donde lo instalaste: busca la opción de copia de seguridad o exportación. Esa copia permite instalarlo en el ordenador. ¿Qué aplicación utilizaste para obtener el certificado?'};
     return {text:(c.digitalHelpAttempts??0)<=1?`Claro, vamos paso a paso: desde el ordenador donde tienes el certificado, abre ${officialLinks.sede} y entra por «Certificado Digital». ¿Consigues acceder al Área del ciudadano?`:'Dentro del Área del ciudadano, abre «Apoderamiento apud acta», inicia un nuevo apoderamiento y elige «En calidad de poderdante», siguiendo la guía enviada. ¿En qué pantalla o mensaje te quedas?'};
   },
-  [TemplateId.CERTIFICATE_COPY_HELP]:(c,_version,variables)=>({text:(c.certificateHelpAttempts??0)<=1?'Si no consigues terminarlo, podemos ayudarte con una copia de tu certificado. Primero vamos a localizarla: ¿lo tienes instalado en el ordenador o en una aplicación del móvil?':(c.certificateHelpAttempts??0)===2?`${variables?.helpTopic==='COPY_MOBILE'?'En el móvil, abre la aplicación donde obtuviste el certificado y busca la copia de seguridad o exportación.':'Busca la copia del certificado en Descargas o en la aplicación donde lo obtuviste.'} Suele ser un archivo .p12 o .pfx; no envíes la contraseña por este chat. ¿Has encontrado ese archivo?`:'Si no encuentras el archivo, revisa la opción de copia de seguridad o exportación de la aplicación del certificado y protege la copia con una contraseña que conservarás tú. ¿Qué aplicación estás usando para localizar esa opción?'}),
-  [TemplateId.CERT_ACQUISITION_LINKS_DNI]:()=>({text:`Primero vamos a obtener tu certificado digital: con DNI puedes consultar la vía con DNIe (${officialLinks.fnmtDnie}) o la vídeo identificación de la FNMT (${officialLinks.fnmtVideo}), que tiene un coste propio indicado en su web. Después te guiaré para hacer el apoderamiento en la Sede Judicial. ¿Qué vía para obtener el certificado prefieres?`,buttons:acquiredButtons}),
-  [TemplateId.CERT_ACQUISITION_LINKS_NIE]:()=>({text:`Con NIE puedes consultar en tu Ayuntamiento una oficina habilitada para acreditar tu identidad y obtener el certificado FNMT: ${officialLinks.fnmtOffice}. Confirma qué documentos necesitas y si debes pedir cita. Cuando tengas el certificado, me comentas.`,buttons:acquiredButtons}),
+  [TemplateId.CERTIFICATE_COPY_HELP]:(c,_version,variables)=>{
+    // The device is already known from the case: asking "PC or mobile?" again is the repetition
+    // the manager reported on 18 Sep.
+    // "No computer" is recorded as a mobile-branch state rather than a field on the case.
+    const mobileBranch=['MOBILE_TRIAGE_PC_CHECK','MOBILE_EXPORT_GUIDE_SENT','MOBILE_ASSIST_CONSENT_REQUESTED'].includes(c.currentState);
+    const onMobile=c.certDevice==='MOBILE'||variables?.helpTopic==='COPY_MOBILE'||mobileBranch;
+    const attempts=c.certificateHelpAttempts??0;
+    if(attempts<=1)return {text:onMobile
+      ?'Vamos a sacar una copia de tu certificado y así lo resolvemos. Abre en el móvil la aplicación donde lo obtuviste y busca «copia de seguridad» o «exportar».'
+      :'Vamos a por una copia de tu certificado y lo resolvemos. ¿La tienes en el ordenador o en una aplicación del móvil?'};
+    if(attempts===2)return {text:`${onMobile?'Abre la aplicación del certificado en el móvil y busca «copia de seguridad» o «exportar».':'Busca la copia del certificado en Descargas o en la aplicación donde lo obtuviste.'} Suele ser un archivo .p12 o .pfx.`};
+    return {text:'Si no aparece, revisa la opción de copia de seguridad o exportación de esa aplicación y ponle una contraseña al archivo. Después mándame ese archivo por aquí con su contraseña y hago yo el apoderamiento.'};
+  },
+  // The two routes differ in what the client needs at hand, so say that before asking them to choose.
+  [TemplateId.CERT_ACQUISITION_LINKS_DNI]:()=>({text:'Primero conseguimos tu certificado digital y después hacemos el apoderamiento.\n\n1) DNI electrónico: necesitas lector o móvil compatible y tu PIN.\n2) Vídeo identificación: desde casa, con un coste propio de la FNMT.\n\n¿Cuál te viene mejor?',buttons:acquiredButtons}),
+  // Dayana's protocol (18 Sep): the Ayuntamiento hands over a document with a link and a password
+  // that installs the certificate on the client's own computer. We never ask for an FNMT code.
+  [TemplateId.CERT_ACQUISITION_LINKS_NIE]:()=>({text:'Pide cita en tu Ayuntamiento, oficina de acreditación de la FNMT, para identificarte con tu NIE.\n\nAllí te entregan un documento con un enlace y una contraseña para descargar el certificado en tu ordenador.',buttons:acquiredButtons}),
   [TemplateId.CERT_ACQUISITION_LINKS_UNKNOWN_ID]:()=>({text:'Necesitamos que el gestor confirme tu documento de identidad para indicarte una vía de obtención del certificado adecuada a tu caso.',buttons:[help]}),
   [TemplateId.COURT_POWER_CHECKLIST]:()=>({text:'De acuerdo, puedes hacer el apoderamiento por tu cuenta en el juzgado, de forma gratuita. Lleva tu documento de identidad y la lista adjunta de procuradores, abogados y facultades; confirma con la oficina si necesitas cita. Cuando lo tengas, envíanos el justificante PDF completo para revisarlo.',attachment:'COURT_CHECKLIST'}),
   [TemplateId.APUDATA_NOT_ELIGIBLE_COURT_FALLBACK]:()=>({text:'El proveedor no ha confirmado la admisión de tu documentación. El gestor te ayudará a continuar por la vía presencial. Lleva tu identificación y la lista adjunta a la oficina judicial, previa consulta de sus requisitos y cita.',attachment:'COURT_CHECKLIST'}),

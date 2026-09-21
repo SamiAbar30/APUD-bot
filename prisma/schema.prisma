@@ -73,6 +73,13 @@ model BotApodExpediente {
   automationPaused Boolean @default(false)
   optOutAt DateTime?
   priorConversation Boolean @default(false)
+  /// Last question actually asked, so a returning client is never asked something else.
+  pendingQuestion String?
+  pendingQuestionAt DateTime?
+  /// Durable, redacted summary of what the client has told us beyond the recent window.
+  conversationSummary String?
+  conversationSummaryAt DateTime?
+  conversationSummaryTurns Int @default(0)
   messages BotApodMessage[]
   humanTasks BotApodHumanTask[]
   triggers BotApodTrigger[]

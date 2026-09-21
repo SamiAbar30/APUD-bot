@@ -7,6 +7,7 @@ const axios = require("axios");
 const bodyParser = require("body-parser");
 const { parseWhatsAppPayload } = require("./utils/payloadParser");
 const { constructWebhookPayload } = require("./utils/webhookConstructor");
+const { installPublicAccess } = require("./public-access");
 
 
 const PORT = Number(process.env.WCE_BRIDGE_PORT || 3001);
@@ -61,6 +62,7 @@ function emitUiMessage(message) {
   io.emit("ui_message", message);
 }
 
+const publicAccess = installPublicAccess(app, io);
 app.use(cors());
 app.use(bodyParser.json());
 
@@ -93,7 +95,21 @@ app.post("/send-to-emulator", (req, res) => {
 });
 
 // Socket.io: Listen for replies from UI, translate, and POST to bot
+let demoSessionId = String(Date.now());
+
+// The operator clears the conversation server-side; browsers keep their own copy in localStorage,
+// so a new session id is what actually empties their screen.
+app.post("/clear-ui", (req, res) => {
+  demoSessionId = String(Date.now());
+  pendingUiMessages.length = 0;
+  recentUiMessages.length = 0;
+  io.emit("ui_session", { id: demoSessionId });
+  console.log("🧹 UI cleared; new demo session", demoSessionId);
+  res.json({ cleared: true, sessionId: demoSessionId });
+});
+
 io.on("connection", (socket) => {
+  socket.emit("ui_session", { id: demoSessionId });
   socket.emit("bot_activity", activity);
   void refreshActivity();
   console.log("✅ UI client connected:", socket.id);

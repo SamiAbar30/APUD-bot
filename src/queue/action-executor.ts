@@ -16,7 +16,10 @@ import { approvedTemplate } from '../core/approved-template.js';
 import { E } from '../core/workflow-events.js';
 import type { Queues } from './queues.js';
 import { canFollowUp, FOLLOW_UP_STATES, nextFollowUp } from '../core/follow-up.js';
+import { randomUUID } from 'node:crypto';
 import { redactConversationPii } from '../core/conversation-policy.js';
+import { redactOutboundHistory } from '../core/outbound-history.js';
+import { lastQuestionOf } from '../core/case-memory.js';
 type Receipt = {receipt:Record<string,unknown>;event?:string;patch?:WorkflowPatch;awaitDelivery?:boolean};
 const EffectContextSchema=z.object({
   id:z.string(),version:z.number().int(),dni:z.string(),nombre:z.string(),telefono:z.string(),
@@ -107,7 +110,12 @@ export class ActionExecutor {
           if(updated.count!==1)throw new AdapterError('ACTION_ATTEMPT_CHANGED','uncertain');
           if(completed.awaitDelivery){
             const at=new Date();
-            if(typeof completed.receipt.historyText==='string')await tx.botApodMessage.upsert({where:{externalId:`outbox:${id}`},create:{expedienteId:c.id,externalId:`outbox:${id}`,role:'assistant',content:redactConversationPii(completed.receipt.historyText).slice(0,2000),source:'OUTBOX_ACCEPTED'},update:{}});
+            if(typeof completed.receipt.historyText==='string'){
+              const historyText=redactOutboundHistory(completed.receipt.historyText);
+              await tx.botApodMessage.upsert({where:{externalId:`outbox:${id}`},create:{expedienteId:c.id,externalId:`outbox:${id}`,role:'assistant',content:historyText.slice(0,2000),source:'OUTBOX_ACCEPTED'},update:{}});
+              const question=lastQuestionOf(historyText);
+              if(question)await tx.botApodExpediente.update({where:{id:c.id},data:{pendingQuestion:question,pendingQuestionAt:new Date()}});
+            }
             if(current.reminderCycle===c.reminderCycle&&!current.automationPaused&&!current.optOutAt){
               const anchor=current.reminderAnchorAt??at;
               const day=isReminder?Number(actionPayload.reminderDay):current.lastReminderDay;
@@ -128,6 +136,11 @@ export class ActionExecutor {
         const receipt={...priorReceipt,executionContext:context,...(result?{...result.receipt,...(result.event?{nextEvent:result.event}:{}),effectResult:result}:{})};
         const updated=await this.flow.db.botApodAccion.updateMany({where:{id,...(running?{status:'RUNNING',startedAt}:{status:action.status})},data:{status,receipt:json(receipt),lastError:errorCode(error)}});
         if(updated.count===1&&['FAILED','UNCERTAIN','HUMAN_REQUIRED'].includes(status))await this.queues.deadLetter.add('effect-needs-review',{actionId:id,expedienteId:c.id,code:errorCode(error)},{jobId:`dlq-${id}`,removeOnComplete:false});
+        const isFallbackNotice=action.idempotencyKey.startsWith('blocked-notice-');
+        if(updated.count===1&&status==='BLOCKED'&&!isFallbackNotice&&['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA'].includes(action.actionType)&&!c.optOutAt){
+          await this.flow.db.botApodHumanTask.upsert({where:{dedupeKey:`blocked:${id}`},create:{expedienteId:c.id,dedupeKey:`blocked:${id}`,kind:'CONVERSATION_REVIEW',reason:`Mensaje bloqueado: ${errorCode(error)}`,evidence:json({actionId:id,code:errorCode(error)})},update:{}});
+          await this.flow.db.botApodAccion.upsert({where:{idempotencyKey:`blocked-notice-${id}`},create:{expedienteId:c.id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:'Para seguir con este paso necesito que lo revise una persona del despacho. Te escribimos por aquí en cuanto lo tenga.'},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:`blocked-notice-${id}`},update:{}});
+        }
       }
     });
   }
@@ -157,8 +170,10 @@ export class ActionExecutor {
           const variables=rawVariables&&typeof rawVariables==='object'&&!Array.isArray(rawVariables)?rawVariables as TemplateVariables:undefined;
           const guide=messageForCase(c,this.flow.env.CONSENT_VERSION,String(actionPayload.template??''),variables);
           historyText=guide.text;
-          if(templateId==='ASSIST_CONSENT_REQUEST'){
-            if(!this.flow.env.CONSENT_TEXT_FILE)throw new AppError('CONSENT_TEXT_NOT_APPROVED');
+          // With an approved consent text configured, that text is what goes out. Without one the
+          // plain request is sent instead of blocking the case, which is what used to leave the
+          // client reading certificate instructions they had already said they could not follow.
+          if(templateId==='ASSIST_CONSENT_REQUEST'&&this.flow.env.CONSENT_TEXT_FILE){
             guide.text=await readFile(this.flow.env.CONSENT_TEXT_FILE,'utf8');
             if(!guide.text.includes(this.flow.env.CONSENT_VERSION??''))throw new AppError('CONSENT_VERSION_NOT_IN_APPROVED_TEXT');
           }
@@ -185,7 +200,7 @@ export class ActionExecutor {
             await beforeEffect();result=guide.buttons?await this.wa.sendDocumentButtons(c.telefono,mediaId,guide.text,guide.buttons):await this.wa.sendDocument(c.telefono,mediaId,fileName,guide.text);
           }else {await beforeEffect();result=guide.buttons?await this.wa.sendButtons(c.telefono,guide.text,guide.buttons):await this.wa.sendText(c.telefono,guide.text);}
         }
-        return {receipt:{...result,to:c.telefono,template:(a.payload as Record<string,unknown>).template,historyText:redactConversationPii(historyText),documentId:c.documentId,documentSha256:sentDocument?.sha256Hash,consentVersion:c.currentState==='MOBILE_ASSIST_CONSENT_REQUESTED'?this.flow.env.CONSENT_VERSION:undefined},...(templateId==='COMPLETION_NOTICE'?{event:E.delivered}:{}),awaitDelivery:true};
+        return {receipt:{...result,to:c.telefono,template:(a.payload as Record<string,unknown>).template,historyText:redactOutboundHistory(historyText),documentId:c.documentId,documentSha256:sentDocument?.sha256Hash,consentVersion:c.currentState==='MOBILE_ASSIST_CONSENT_REQUESTED'?this.flow.env.CONSENT_VERSION:undefined},...(templateId==='COMPLETION_NOTICE'?{event:E.delivered}:{}),awaitDelivery:true};
       }
       case 'UPLOAD_KMALEON_DOCUMENT':{
         if(!this.adapters.kmaleon||!c.kmaleonExpedienteId)throw new AppError('KMALEON_NOT_CONFIGURED');

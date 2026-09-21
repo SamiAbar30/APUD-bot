@@ -24,9 +24,21 @@ const WhatsAppEmulator = () => {
   useEffect(() => {
     if (!socket) return;
     const failed = ({message}: {message: string}) => toast.error(message);
+    // The chat lives in this browser's localStorage, so a server-side reset must reach it:
+    // a new demo session id means the operator cleared the conversation.
+    const SESSION_KEY = 'wce_emulator_session';
+    const session = ({ id }: { id: string }) => {
+      try {
+        if (localStorage.getItem(SESSION_KEY) === id) return;
+        localStorage.setItem(SESSION_KEY, id);
+        localStorage.removeItem('wce_emulator_chats');
+        setMessages([]);
+      } catch { /* private browsing: the chat simply stays as it is */ }
+    };
     socket.on('bot_activity', setActivity);
     socket.on('reply_error', failed);
-    return () => { socket.off('bot_activity', setActivity); socket.off('reply_error', failed); };
+    socket.on('ui_session', session);
+    return () => { socket.off('bot_activity', setActivity); socket.off('reply_error', failed); socket.off('ui_session', session); };
   }, [socket]);
 
   useEffect(() => {

@@ -42,6 +42,13 @@ export function startWorkers(flow:WorkflowService,executor:ActionExecutor,queues
     for(const row of pending)await queues.inbound.add('process',{expedienteId:row.expedienteId},{jobId:`recovery-${row.expedienteId}-${Math.floor(Date.now()/10000)}`});
     const docs=await flow.db.botApodDocumento.findMany({where:{rawAuditJson:{path:['status'],equals:'PENDING'}},take:50});
     for(const doc of docs)await enqueueAudit(doc);
+    // A transport blip (bridge restarted, network gone) leaves a send UNCERTAIN, and an UNCERTAIN
+    // send stops every later reply for that case. Re-queue it so the reconcile path can confirm
+    // what actually reached the client and finish it, instead of freezing the conversation.
+    const stuck=(await flow.db.botApodAccion.findMany({where:{status:'UNCERTAIN',updatedAt:{lt:new Date(Date.now()-60000)}},orderBy:{createdAt:'asc'},take:50}))
+      .filter(a=>a.retryCount<a.maxRetries);
+    for(const a of stuck){const queue=a.actionType.includes('KMALEON')||a.actionType.includes('DAYANA')?queues.kmaleon:queues.notifications;
+      await queue.add('effect',{actionId:a.id},{jobId:`reconcile-${a.id}-${Math.floor(Date.now()/60000)}`});}
     const actions=await flow.db.botApodAccion.findMany({where:{status:'PENDING'},orderBy:{createdAt:'asc'},take:100});
     for(const a of actions){const queue=a.actionType.includes('KMALEON')||a.actionType.includes('DAYANA')?queues.kmaleon:queues.notifications;await queue.add('effect',{actionId:a.id},{jobId:`effect-${a.id}-${a.retryCount}`});}
   }catch{logger.error('Outbox dispatch unavailable; durable rows retained');}finally{ticking=false;}}

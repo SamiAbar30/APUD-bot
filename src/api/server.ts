@@ -208,7 +208,11 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
           if(env.CONVERSATION_PHASE===3&&!m.buttonId&&(m.text||m.media?.mimeType!=='application/pdf')){
             const text=m.text?redactConversationPii(m.text):/pkcs12/i.test(m.media?.mimeType??'')||/\.(?:p12|pfx)$/i.test(m.media?.filename??'')?'[CONTENIDO_SENSIBLE_OMITIDO]':'El cliente ha enviado un adjunto que requiere revisión de una persona.';
             const stop=/^(?:stop|baja|no me escribas(?: más| mas)?|no quiero seguir|dejad de escribirme|cancelar contacto)[.! ]*$/i.test(text.trim());
-            await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:stop?EventType.CLIENT_OPT_OUT:'CONVERSATION_TEXT',payload:{messageId:m.id,timestamp:m.timestamp,text,...(textHash?{messageSha256:textHash}:{}),...(m.media?{mediaId:m.media.id,mediaType:m.media.mimeType}:{})},source:'WHATSAPP',conversationText:text});
+            // The office works with the client's certificate, so what the client actually wrote is
+            // kept on the durable inbox row for the gestor. The conversation history the model
+            // reads stays redacted: the client's secret never reaches the provider.
+            const operatorText=m.text&&m.text!==text?m.text:undefined;
+            await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:stop?EventType.CLIENT_OPT_OUT:'CONVERSATION_TEXT',payload:{messageId:m.id,timestamp:m.timestamp,text,...(operatorText?{operatorText}:{}),...(textHash?{messageSha256:textHash}:{}),...(m.media?{mediaId:m.media.id,mediaType:m.media.mimeType}:{})},source:'WHATSAPP',conversationText:text});
             continue;
           }
           const history=c?boundedConversationHistory((await flow.db.botApodMessage.findMany({where:{expedienteId:c.id},orderBy:[{createdAt:'desc'},{id:'desc'}],take:12})).reverse().map(x=>({role:x.role==='user'?'user' as const:'assistant' as const,content:x.content}))):[];

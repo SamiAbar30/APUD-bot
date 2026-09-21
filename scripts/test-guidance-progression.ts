@@ -91,10 +91,13 @@ console.log('PASS specific signing guidance and explicit human request');
 
 c={...initial,currentState:ApodState.PC_TUTORIAL_SENT,hasDigitalCert:true,certDevice:'PC',digitalHelpAttempts:3,certificateHelpAttempts:1};
 const mobileCopy=await apply('en el móvil');
-assert.match(mobileCopy.text,/En el móvil.*aplicación.*copia de seguridad/);
+assert.match(mobileCopy.text,/m[oó]vil/);
+assert.match(mobileCopy.text,/aplicaci[oó]n/);
+assert.match(mobileCopy.text,/copia de seguridad|exportar/);
+assert.doesNotMatch(mobileCopy.text,/¿Has encontrado ese archivo\?/,'No pushy trailing question (manager note, 18 Sep)');
 assert.equal(c.certificateHelpAttempts,2);
 const readyCopy=await agent.turn(c,'ya tengo el archivo');
-assert.equal(readyCopy.payload.requiresHumanReview,true);
-assert.match(String(readyCopy.payload.responseText),/canal habilitado/);
-assert.doesNotMatch(String(readyCopy.payload.responseText),/juzgado|empresa colaboradora|hemos recibido/);
-console.log('PASS certificate-copy answers stay contextual; delivery handoff occurs only when ready');
+assert.equal(readyCopy.type,EventType.CLIENT_REQUESTS_ASSISTANCE,'Locating the copy must advance to assisted processing');
+const consent=evaluateNextStep(c,readyCopy as any);
+assert.equal(consent.nextStep,ApodState.MOBILE_ASSIST_CONSENT_REQUESTED,'Assistance requires explicit consent first');
+console.log('PASS certificate-copy answers stay contextual; a located copy moves to assisted consent');
