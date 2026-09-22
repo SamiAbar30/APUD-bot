@@ -22,7 +22,7 @@ const values = {
   POSTGRES_PASSWORD: required('POSTGRES_PASSWORD'), DATABASE_URL: required('DATABASE_URL'), REDIS_URL: required('REDIS_URL'),
   QUEUE_PREFIX: 'apod-wce', OPERATOR_TOKEN: required('OPERATOR_TOKEN'), LOG_LEVEL: 'info', STORAGE_DIR: './storage',
   MAX_DOCUMENT_BYTES: '15000000', OUTBOUND_ENABLED: 'true', WORKERS_ENABLED: 'true', DEMO_DATA_ENABLED: 'true',
-  DEMO_WHATSAPP_RECIPIENTS: '34663094035', WHATSAPP_ENABLED: 'true', WHATSAPP_TRANSPORT: 'emulator',
+  DEMO_WHATSAPP_RECIPIENTS: '34600000000', WHATSAPP_ENABLED: 'true', WHATSAPP_TRANSPORT: 'emulator',
   WA_GRAPH_VERSION: 'v23.0', WA_API_BASE_URL: 'http://127.0.0.1:3001/send-to-emulator',
   WA_ACCESS_TOKEN: 'wce-local-access-token', WA_PHONE_NUMBER_ID: '999000000000', WA_BUSINESS_ACCOUNT_ID: 'wce-local-business',
   WA_APP_SECRET: appSecret, WA_VERIFY_TOKEN: verifyToken, WA_TEMPLATE_CONFIG_FILE: '',
@@ -91,4 +91,4 @@ const lines = ['# Generated local-only WCE environment; never use this file for 
 for (const [key, value] of Object.entries(values)) lines.push(`${key}=${value}`);
 await writeFile(targetPath, `${lines.join('\n')}\n`, { mode: 0o600 });
 await chmod(targetPath, 0o600);
-console.log(JSON.stringify({ environmentFile: targetPath, transport: 'emulator', recipient: '34663094035', externalMetaCalls: false, demoMaterialsGenerated, secretsPrinted: false }));
+console.log(JSON.stringify({ environmentFile: targetPath, transport: 'emulator', recipient: '34600000000', externalMetaCalls: false, demoMaterialsGenerated, secretsPrinted: false }));

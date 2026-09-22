@@ -14,7 +14,7 @@ const env=loadEnv();
 assert.equal(env.WHATSAPP_TRANSPORT,'emulator');
 assert.equal(env.KMALEON_ENABLED,false);assert.equal(env.SEDE_ENABLED,false);assert.equal(env.APUDATA_ENABLED,false);
 assert.equal(env.AI_MODE,'online');assert.equal(env.CONVERSATION_AI_PROVIDER,'openai-compatible');
-assert.ok(env.DEMO_WHATSAPP_RECIPIENTS.includes('34663094035'));
+assert.ok(env.DEMO_WHATSAPP_RECIPIENTS.includes('34600000000'));
 const db=new PrismaClient();const browser=await chromium.launch({headless:true});
 const waitFor=async<T>(fn:()=>Promise<T|null|false>,label:string):Promise<T>=>{
   const deadline=Date.now()+90000;
@@ -22,8 +22,8 @@ const waitFor=async<T>(fn:()=>Promise<T|null|false>,label:string):Promise<T>=>{
   throw new Error(`TIMEOUT_${label}`);
 };
 try{
-  const original=await db.botApodExpediente.findUniqueOrThrow({where:{telefono:'34663094035'}});
-  assert.equal(original.kmaleonExpedienteId,'demo-kmaleon-34663094035');assert.equal(original.optOutAt,null);
+  const original=await db.botApodExpediente.findUniqueOrThrow({where:{telefono:'34600000000'}});
+  assert.equal(original.kmaleonExpedienteId,'demo-kmaleon-34600000000');assert.equal(original.optOutAt,null);
   const source=await db.botApodMessage.findMany({where:{expedienteId:original.id,role:'user',createdAt:{gte:new Date('2026-09-16T21:49:00Z'),lte:new Date('2026-09-16T21:54:00Z')}},orderBy:[{createdAt:'asc'},{id:'asc'}]});
   assert.equal(source.length,8);
   await mkdir('evidence',{recursive:true});

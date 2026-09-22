@@ -1,4 +1,4 @@
-export const DEMO_PHONE_NUMBER='34663094035';
+export const DEMO_PHONE_NUMBER='34600000000';
 export const DEMO_FIXTURE_SOURCE='DEMO_FIXTURE' as const;
 
 export interface DemoFixture {

@@ -11,7 +11,7 @@ import {resolve} from 'node:path';
 import {PrismaClient} from '@prisma/client';
 
 const ARCHIVE_DIR='evidence/conversations';
-const phone=process.argv.find(a=>/^\d{6,}$/.test(a))??process.env.DEMO_WHATSAPP_RECIPIENTS?.split(',')[0]?.trim()??'34663094035';
+const phone=process.argv.find(a=>/^\d{6,}$/.test(a))??process.env.DEMO_WHATSAPP_RECIPIENTS?.split(',')[0]?.trim()??'34600000000';
 const label=process.argv.includes('--label')?process.argv[process.argv.indexOf('--label')+1]??'':'';
 
 const db=new PrismaClient();

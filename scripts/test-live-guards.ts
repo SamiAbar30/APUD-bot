@@ -36,7 +36,7 @@ const mapping: KmaleonResponseMapping = {
   projectIdentity: () => ({ projectId: '123', dni: '12345678Z' }),
   projectSearchFilter: () => ({}),
   projectSearchPage: () => ({ items: [], hasMore: false }),
-  projectCandidate: () => ({ projectId: '123', numeroExpediente: '123', empresa: 'Demo Empresa', dni: '12345678Z', nombre: 'Demo', telefono: '34663094035' }),
+  projectCandidate: () => ({ projectId: '123', numeroExpediente: '123', empresa: 'Demo Empresa', dni: '12345678Z', nombre: 'Demo', telefono: '34600000000' }),
   annotationsPage: () => ({ items: [], hasMore: false }),
   documentBytes: () => Buffer.from('%PDF-'),
 };
@@ -70,22 +70,22 @@ await assert.rejects(
 );
 assert.deepEqual(clientCalls, []);
 
-assert.deepEqual(demoFixture('34663094035'), {
+assert.deepEqual(demoFixture('34600000000'), {
   source: 'DEMO_FIXTURE',
   dni: '12345678Z',
   nombre: 'DEMO APOD CLIENT',
-  telefono: '34663094035',
+  telefono: '34600000000',
   empresa: 'MYKREDIT',
   numeroExpediente: '24531',
-  kmaleonExpedienteId: 'demo-kmaleon-34663094035',
+  kmaleonExpedienteId: 'demo-kmaleon-34600000000',
 });
 
 assert.throws(
-  () => assertWhatsAppRecipientAllowed('34663094036', ['34663094035']),
+  () => assertWhatsAppRecipientAllowed('34663094036', ['34600000000']),
   (error: unknown) => error instanceof Error && error.message === 'DEMO_RECIPIENT_NOT_ALLOWED',
 );
-assert.doesNotThrow(() => assertWhatsAppRecipientAllowed('34663094035', ['34663094035']));
-const demoWhatsApp=new WhatsAppClient({accessToken:'test-access-token',phoneNumberId:'123456789',apiVersion:'v23.0',writesEnabled:true,allowedRecipients:['34663094035']});
+assert.doesNotThrow(() => assertWhatsAppRecipientAllowed('34600000000', ['34600000000']));
+const demoWhatsApp=new WhatsAppClient({accessToken:'test-access-token',phoneNumberId:'123456789',apiVersion:'v23.0',writesEnabled:true,allowedRecipients:['34600000000']});
 await assert.rejects(
   () => demoWhatsApp.sendText('34663094036','probe'),
   (error: unknown) => error instanceof Error && error.message === 'DEMO_RECIPIENT_NOT_ALLOWED',

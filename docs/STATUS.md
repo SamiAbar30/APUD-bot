@@ -29,7 +29,7 @@ También se conectó el paquete externo `ai_agent_apoderamiento` mediante `APOD_
 | Webhooks desactivados con claves ya presentes | Rechazados con HTTP 503, sin mutaciones | Incluida en `evidence/setup-test.json` |
 | Búsqueda y vinculación de expedientes Kmaleon | Implementada como lectura + relectura de identidad; la UI no crea expedientes manualmente | `GET /api/kmaleon/search`, `POST /api/cases/from-kmaleon` |
 | Carmen opcional para lecturas Kmaleon | Superada; filing/avisos siguen bloqueados sin código de destinatario | `scripts/test-live-guards.ts` |
-| Fixture local para WhatsApp demo | Implementada; un expediente determinista para `34663094035`, sin llamadas externas | `npm run demo:seed`, `npm run demo:start` |
+| Fixture local para WhatsApp demo | Implementada; un expediente determinista para `34600000000`, sin llamadas externas | `npm run demo:seed`, `npm run demo:start` |
 | Allowlist de envíos WhatsApp demo | Implementada; se rechaza cualquier otro teléfono antes de HTTP | `scripts/test-live-guards.ts` |
 
 El test usa PostgreSQL, Redis/BullMQ, Fastify HTTP, almacenamiento y auditor PDF reales. Genera casos y PDF identificados como MOCK y utiliza puertos de proveedor offline. Comprueba revisión humana, recorrido final, provisional/revocación/reemisión, preaprobación, evidencia de pago, idempotencia y rechazos de documentos incorrectos. Dos casos llegan a `COMPLETED` dentro del esquema aislado de prueba. El caso de pago permanece en `APUDATA_VIDEO_IN_PROGRESS`, pendiente del vídeo simulado.

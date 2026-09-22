@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Run a real Meta WhatsApp conversation against `34663094035` using an explicitly seeded local demo case while allowing Kmaleon read-only search without Carmen's recipient code.
+**Goal:** Run a real Meta WhatsApp conversation against `34600000000` using an explicitly seeded local demo case while allowing Kmaleon read-only search without Carmen's recipient code.
 
 **Architecture:** Keep local demo data in PostgreSQL and mark its provenance on the case and audit log. Keep Kmaleon search/read operations independent from the optional Carmen recipient code, while document filing and notices require that code at the gateway boundary. Enforce a demo WhatsApp recipient allowlist inside `WhatsAppClient` before any outbound Meta request; inbound traffic remains the existing signed webhook and durable queue flow.
 
@@ -90,8 +90,8 @@ git commit -m "feat: make Carmen recipient optional for Kmaleon reads"
 Extend `scripts/test-live-guards.ts` with a real local database assertion that the fixture helper exposes the deterministic source and that a second seed finds the same unique phone/DNI instead of creating a duplicate. The test must use a transaction and a temporary PostgreSQL schema selected through `SETUP_DATABASE_URL`.
 
 ```ts
-const fixture = demoFixture('34663094035');
-assert.deepEqual(fixture, { source:'DEMO_FIXTURE', dni:'12345678Z', nombre:'DEMO APOD CLIENT', telefono:'34663094035', kmaleonExpedienteId:'demo-kmaleon-34663094035' });
+const fixture = demoFixture('34600000000');
+assert.deepEqual(fixture, { source:'DEMO_FIXTURE', dni:'12345678Z', nombre:'DEMO APOD CLIENT', telefono:'34600000000', kmaleonExpedienteId:'demo-kmaleon-34600000000' });
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -132,7 +132,7 @@ git commit -m "feat: add guarded local WhatsApp demo fixture"
 
 - [ ] **Step 1: Write the failing test**
 
-Add a test that constructs `WhatsAppClient` with `writesEnabled:true` and `allowedRecipients:['34663094035']`, then calls `sendText('34663094036','probe')` and asserts `DEMO_RECIPIENT_NOT_ALLOWED`. Add a second assertion that `sendText('34663094035','probe')` does not fail the allowlist check; it may fail later only if the network is reached, so the test must use a pure exported `assertWhatsAppRecipientAllowed()` helper for the positive case.
+Add a test that constructs `WhatsAppClient` with `writesEnabled:true` and `allowedRecipients:['34600000000']`, then calls `sendText('34663094036','probe')` and asserts `DEMO_RECIPIENT_NOT_ALLOWED`. Add a second assertion that `sendText('34600000000','probe')` does not fail the allowlist check; it may fail later only if the network is reached, so the test must use a pure exported `assertWhatsAppRecipientAllowed()` helper for the positive case.
 
 - [ ] **Step 2: Run test to verify it fails**
 
@@ -206,7 +206,7 @@ git commit -m "feat: add live WhatsApp demo start command"
 - Evidence: `evidence/demo-live-check.json`
 
 **Interfaces:**
-- Required runtime values: `SERVICE_MODE=live`, `DATA_MODE=real`, `DEMO_DATA_ENABLED=true`, `DEMO_WHATSAPP_RECIPIENTS=34663094035`, `WHATSAPP_ENABLED=true`, `OUTBOUND_ENABLED=true`, `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`, and a public `PUBLIC_BASE_URL`.
+- Required runtime values: `SERVICE_MODE=live`, `DATA_MODE=real`, `DEMO_DATA_ENABLED=true`, `DEMO_WHATSAPP_RECIPIENTS=34600000000`, `WHATSAPP_ENABLED=true`, `OUTBOUND_ENABLED=true`, `WA_PHONE_NUMBER_ID`, `WA_ACCESS_TOKEN`, `WA_APP_SECRET`, `WA_VERIFY_TOKEN`, and a public `PUBLIC_BASE_URL`.
 
 - [ ] **Step 1: Run configuration checks**
 
@@ -218,7 +218,7 @@ Run: `npm run demo:seed`; confirm one `source=DEMO_FIXTURE` case exists in Postg
 
 - [ ] **Step 3: Start the first real message**
 
-Run: `npm run demo:start`; confirm the resulting action is queued for `34663094035` and inspect the action receipt for Meta acceptance without printing tokens.
+Run: `npm run demo:start`; confirm the resulting action is queued for `34600000000` and inspect the action receipt for Meta acceptance without printing tokens.
 
 - [ ] **Step 4: Verify inbound traffic**
 

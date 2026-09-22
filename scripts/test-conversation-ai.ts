@@ -92,7 +92,7 @@ try {
     state: 'WAITING_CERT_RESPONSE',
     hasDigitalCert: null,
     allowedOptions: ['HAS_CERT_YES', 'HAS_CERT_NO'],
-    text: 'Tengo certificado. Mi DNI es 12345678Z y mi telefono 34663094035.',
+    text: 'Tengo certificado. Mi DNI es 12345678Z y mi telefono 34600000000.',
   });
   assert.deepEqual(result, JSON.parse(responseBody));
 
@@ -104,7 +104,7 @@ try {
   assert.equal('temperature' in firstRequest.body, false);
   const serialized = JSON.stringify(firstRequest.body);
   assert.equal(serialized.includes('12345678Z'), false);
-  assert.equal(serialized.includes('34663094035'), false);
+  assert.equal(serialized.includes('34600000000'), false);
   assert.equal(serialized.includes('HAS_CERT_YES'), true);
 
   responseBody = JSON.stringify({ kind: 'REPLY', text: 'Puedo explicarte el siguiente paso.', requiresHumanReview: false });

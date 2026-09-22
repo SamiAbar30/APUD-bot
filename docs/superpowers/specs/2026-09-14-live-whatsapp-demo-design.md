@@ -8,8 +8,8 @@ Allow the operator to exercise the APOD conversation with one real WhatsApp reci
 
 - `CARMEN_USER_ID` is optional while the Kmaleon adapter is used for search, project selection, or address reads.
 - Kmaleon document filing and Carmen notification fail closed with `KMALEON_RECIPIENT_NOT_CONFIGURED` when the recipient code is absent.
-- A demo fixture command creates or reuses one local case for `34663094035`, marks its provenance as demo data, and never calls Kmaleon or WhatsApp.
-- Demo WhatsApp sends are real Meta API sends, restricted to an explicit recipient allowlist containing `34663094035`. The allowlist is enforced in the client before every outbound operation.
+- A demo fixture command creates or reuses one local case for `34600000000`, marks its provenance as demo data, and never calls Kmaleon or WhatsApp.
+- Demo WhatsApp sends are real Meta API sends, restricted to an explicit recipient allowlist containing `34600000000`. The allowlist is enforced in the client before every outbound operation.
 - Incoming WhatsApp messages continue through the signed Meta webhook, durable inbox, and worker flow. No synthetic webhook is used for the live test.
 - `OUTBOUND_ENABLED` remains the final global write gate. Demo mode cannot bypass it.
 

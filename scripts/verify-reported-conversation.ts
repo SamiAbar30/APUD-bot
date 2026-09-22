@@ -18,7 +18,7 @@ import type { WorkflowEvent } from '../src/domain/fsm/states.js';
 
 const db = new PrismaClient();
 try {
-  const stored = await db.botApodExpediente.findUniqueOrThrow({where:{telefono:'34663094035'}});
+  const stored = await db.botApodExpediente.findUniqueOrThrow({where:{telefono:'34600000000'}});
   const messages = await db.botApodMessage.findMany({where:{expedienteId:stored.id,role:'user',createdAt:{gte:new Date('2026-09-16T21:49:00Z'),lte:new Date('2026-09-16T21:54:00Z')}},orderBy:[{createdAt:'asc'},{id:'asc'}]});
   assert.equal(messages.length,8,'Original reported conversation must remain intact');
   const config = conversationAiFromEnv();
