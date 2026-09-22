@@ -31,6 +31,7 @@ import { OpenAICompatibleConversationModel } from '../adapters/ai/openai-compati
 import { conversationAiFromEnv } from '../config/conversation-ai.js';
 import { loadReferenceAgentPackage } from '../config/reference-agent.js';
 import { requireAgentEvaluations } from '../config/agent-release.js';
+import { apudV2Routes } from './apud-v2.routes.js';
 
 const uuid=z.string().uuid();const idParam=z.object({id:uuid});
 const version=z.number().int().nonnegative();
@@ -100,6 +101,7 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
     await automationRoutes(api,flow,effectiveConversationAiStatus);
     await assistedRoutes(api,flow,executor);
     await addressRoutes(api,flow,executor);
+    await apudV2Routes(api,flow);
     api.get('/setup',async()=>({...readinessConfig(env),runtime:'Node.js 22',validation:env.DATA_MODE==='mock'?'SETUP_WITH_MOCK_DATA':'REAL_EXTERNAL_E2E_PENDING'}));
     api.get('/emulator/activity',async()=>{
       if(env.WHATSAPP_TRANSPORT!=='emulator')throw new AppError('NOT_FOUND',404);

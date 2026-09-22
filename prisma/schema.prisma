@@ -83,6 +83,7 @@ model BotApodExpediente {
   messages BotApodMessage[]
   humanTasks BotApodHumanTask[]
   triggers BotApodTrigger[]
+  registrations BotApodRegistration[]
   direccion String?
   codigoPostal String?
   provincia String?
@@ -214,4 +215,25 @@ model BotApodTrigger {
   expediente BotApodExpediente? @relation(fields:[expedienteId],references:[id])
   @@index([status,createdAt])
   @@map("bot_apod_triggers")
+}
+
+// V2 evidence ledger. Certificates and passwords are never persisted here.
+model BotApodRegistration {
+  id String @id @default(uuid())
+  expedienteId String
+  intent Json
+  intentHash String
+  status String @default("PREPARATION_REQUIRED")
+  version Int @default(0)
+  draftDocumentId String?
+  certificateFingerprint String?
+  approval Json?
+  attemptId String? @unique
+  receiptDocumentId String?
+  registrationReference String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  expediente BotApodExpediente @relation(fields:[expedienteId],references:[id])
+  @@index([expedienteId,createdAt])
+  @@map("bot_apod_registrations")
 }

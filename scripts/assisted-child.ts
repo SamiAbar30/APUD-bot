@@ -46,7 +46,7 @@ async function run(raw: unknown, timeoutMs: unknown): Promise<void> {
       if (!session.isOpen() || !report.usable || !report.passwordValid || !report.keyMatchesCertificate || !report.identityMatches || report.expired || report.notYetValid ||
           !report.validFrom || !report.validTo || !Number.isFinite(report.validFrom.getTime()) || !Number.isFinite(report.validTo.getTime()) ||
           report.validFrom.getTime() > Date.now() || report.validTo.getTime() <= Date.now() || report.reasons.length !== 0 ||
-          report.identityDocumentsFound.length !== 1 || report.keyAlgorithm !== 'RSA' || !report.keyBits || report.keyBits < 2048) {
+          report.identityDocumentsFound.length !== 1 || !report.fingerprintSha256 || report.keyAlgorithm !== 'RSA' || !report.keyBits || report.keyBits < 2048) {
         throw new Error('CERTIFICATE_REJECTED');
       }
       const certificate = session.material();
@@ -59,7 +59,7 @@ async function run(raw: unknown, timeoutMs: unknown): Promise<void> {
         ...draft, inspection: {
           usable: report.usable, passwordValid: report.passwordValid,
           keyMatchesCertificate: report.keyMatchesCertificate, identityMatches: report.identityMatches,
-          expired: report.expired, certRef,
+          expired: report.expired, certRef, certificateFingerprint:report.fingerprintSha256!,
         },
       };
       return verified;

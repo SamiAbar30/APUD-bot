@@ -17,7 +17,7 @@ export interface SedeDraftInput {
 }
 const normalizeDni=(dni:string)=>dni.toUpperCase().replace(/[\s.-]/g,'');
 function officialOrigin(origin:string):boolean{
-  try{const url=checkedHttpsUrl(origin);return url.origin===origin&&!url.port&&(url.hostname==='justicia.gob.es'||url.hostname.endsWith('.justicia.gob.es')||url.hostname==='administracion.gob.es'||url.hostname.endsWith('.administracion.gob.es'));}catch{return false;}
+  try{const url=checkedHttpsUrl(origin);return url.origin===origin&&!url.port&&(url.hostname==='sedejudicial.justicia.es'||url.hostname==='justicia.gob.es'||url.hostname.endsWith('.justicia.gob.es')||url.hostname==='administracion.gob.es'||url.hostname.endsWith('.administracion.gob.es'));}catch{return false;}
 }
 export class SedePlaywright {
   constructor(private readonly options:SedeOptions){

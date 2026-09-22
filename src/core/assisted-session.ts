@@ -24,7 +24,7 @@ export const AssistedDraftInputSchema = z.object({
 export type AssistedDraftInput = z.infer<typeof AssistedDraftInputSchema>;
 export interface AssistedCertificateInspection {
   usable: true; passwordValid: true; keyMatchesCertificate: true;
-  identityMatches: true; expired: false; certRef: string;
+  identityMatches: true; expired: false; certRef: string; certificateFingerprint:string;
 }
 export interface AssistedDraftResult {
   status: 'DRAFT_REQUIRES_HUMAN_SUBMISSION'; pdf: Buffer; sha256: string;
@@ -36,7 +36,7 @@ const ResultSchema = z.object({
   sha256: z.string().regex(/^[a-f0-9]{64}$/), recipeId: z.string().min(1).max(200),
   inspection: z.object({
     usable:z.literal(true), passwordValid:z.literal(true), keyMatchesCertificate:z.literal(true),
-    identityMatches:z.literal(true), expired:z.literal(false), certRef:z.string().regex(/^sha256:[a-f0-9]{64}$/),
+    identityMatches:z.literal(true), expired:z.literal(false), certRef:z.string().regex(/^sha256:[a-f0-9]{64}$/), certificateFingerprint:z.string().regex(/^[a-f0-9]{64}$/),
   }).strict(),
 }).strict();
 export class AssistedSessionError extends Error {
