@@ -17,13 +17,16 @@ export const KmaleonAnnotationSchema=z.object({
   typeCode:z.string().optional(),classCode:z.string().optional(),classDescription:z.string().optional(),comment:z.string().optional(),internal:z.boolean().optional(),priority:z.boolean().optional(),
 });
 export type KmaleonAnnotation=z.infer<typeof KmaleonAnnotationSchema>;
-export interface KmaleonPendingApudActa {
-  externalId:string;projectId:string;macroCode:27;pending:true;open:true;evidenceRef:string;
+/** The exact notice accepted during intake; project identity alone is insufficient. */
+export interface KmaleonTriggerReference {externalId:string;macroCode:24|27;recipientCode:number}
+export interface KmaleonPendingApudActa extends KmaleonTriggerReference {
+  projectId:string;source:'KMALEON_AVISO';pending:true;open:true;evidenceRef:string;
+  macroEvidenceRef:string;recipientEvidenceRef:string;
   candidate?:KmaleonExpedienteCandidate;
 }
 export interface KmaleonPendingApudActaPage {items:KmaleonPendingApudActa[];page:number;hasMore:boolean}
 /** Fresh catalogue evidence. Descriptions are compared whole, never by substring. */
-export interface KmaleonMacro {code:10|27;id:string;description:string;classCode:string;classDescription:string;evidenceRef:string}
+export interface KmaleonMacro {code:10|24|27;id:string;description:string;classCode:string;classDescription:string;evidenceRef:string}
 const addressText=(max:number)=>z.string().trim().min(1).max(max).refine(value=>!/[\u0000-\u001f\u007f]/.test(value));
 export const KmaleonProjectAddressSchema=z.object({
   projectId:addressText(160),dni:addressText(30),direccion:addressText(250),

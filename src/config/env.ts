@@ -18,12 +18,14 @@ const schema=z.object({
   REVOCATION_GUIDE_FILE:optionalPath,REVOCATION_SCREENSHOTS_FILE:optionalPath,WA_TEMPLATE_CONFIG_FILE:optionalPath,
   WHATSAPP_ENABLED:bool,WHATSAPP_TRANSPORT:z.enum(['meta','emulator']).default('meta'),WA_API_BASE_URL:optional,WA_ACCESS_TOKEN:optional,WA_PHONE_NUMBER_ID:optional,WA_BUSINESS_ACCOUNT_ID:optional,WA_APP_SECRET:optional,WA_VERIFY_TOKEN:optional,
   WA_GRAPH_VERSION:z.string().regex(/^v\d+\.\d+$/).default('v23.0'),
+  APUD_VERSION:z.enum(['1','2']).default('1').transform(value=>Number(value) as 1|2),
+  APUD_CREDENTIAL_KEY:optional.refine(value=>value===undefined||/^[a-fA-F0-9]{64}$/.test(value),'APUD_CREDENTIAL_KEY_MUST_BE_64_HEX'),
   CONVERSATION_PHASE:z.coerce.number().int().min(1).max(3).default(3),CONVERSATION_AI_PROVIDER:z.enum(['none','openai-compatible','gemini','claude']).default('none'),CONVERSATION_MODEL:optional,GEMINI_API_KEY:optional,ANTHROPIC_API_KEY:optional,APOD_AGENT_PACKAGE_DIR:optionalPath,
   APOD_MASTER_PROMPT_FILE:optionalPath,APOD_AGENT_EVAL_REPORT:optionalPath,
   // OpenAI-compatible conversation model (Luna, gateway, or local endpoint).
   // Secrets remain optional so the local policy-only mode stays fail-closed.
   AI_MODE:z.enum(['online','local']).default('online'),LOCAL_AI_BASE_URL:z.string().url().default('http://127.0.0.1:11434/v1'),LOCAL_AI_MODEL:optional,LOCAL_AI_API_KEY:optional,
-  KMALEON_POLLER_ENABLED:bool,KMALEON_POLL_INTERVAL_MS:z.coerce.number().int().min(10000).default(60000),DAYANA_USER_ID:optional,
+  KMALEON_POLLER_ENABLED:bool,KMALEON_POLL_INTERVAL_MS:z.coerce.number().int().min(10000).default(60000),DAYANA_USER_ID:optional,SAMI_USER_ID:optional,
   REMINDERS_ENABLED:boolTrue,
   CONVERSATION_QUIET_MS:z.coerce.number().int().min(1000).max(120000).default(60000),
   AI_BASE_URL:optional,AI_API_KEY:optional,AI_MODEL:optional,AI_TIMEOUT_MS:z.coerce.number().int().positive().default(60000),AI_REDACT_PII:boolTrue,AI_STREAM:boolTrue,AI_SIN_TEMPERATURE:boolTrue,
@@ -51,7 +53,8 @@ const schema=z.object({
   needs(e.KMALEON_ENABLED,['KMALEON_CONFIG_FILE','KMALEON_BASE_URL','KMALEON_CLIENT_ID','KMALEON_CLIENT_SECRET','KMALEON_AUTH_STATE','KMALEON_REDIRECT_URI']);
   needs(e.APUDATA_ENABLED,['APUDATA_CONFIG_FILE','APUDATA_BASE_URL','APUDATA_ACCESS_TOKEN','APUDATA_PAYMENT_IBAN','APUDATA_PAYMENT_EVIDENCE_REF']);
   needs(e.SEDE_ENABLED,['SEDE_RECIPE_FILE','CONSENT_VERSION','CONSENT_TEXT_FILE']);
-  if(e.KMALEON_POLLER_ENABLED&&(!e.KMALEON_ENABLED||e.WHATSAPP_TRANSPORT==='emulator'))reject('AVISO27_POLLER_REQUIRES_REAL_KMALEON');
+  if(e.KMALEON_POLLER_ENABLED&&(!e.KMALEON_ENABLED||e.WHATSAPP_TRANSPORT==='emulator'))reject('APUD_AVISO_POLLER_REQUIRES_REAL_KMALEON');
+  if(e.SAMI_USER_ID&&!/^[1-9]\d*$/.test(e.SAMI_USER_ID))reject('SAMI_USER_ID_MUST_BE_NUMERIC');
   if(e.DAYANA_USER_ID&&!/^[1-9]\d*$/.test(e.DAYANA_USER_ID))reject('DAYANA_USER_ID_MUST_BE_NUMERIC');
   if(e.CARMEN_USER_ID&&!/^[1-9]\d*$/.test(e.CARMEN_USER_ID))reject('CARMEN_USER_ID_MUST_BE_NUMERIC');
 });
@@ -59,7 +62,7 @@ export type Env=z.infer<typeof schema>;
 /** Explicit overrides win, including isolated setup test values. Never logs values. */
 export function loadEnv(values:Record<string,string|undefined>=process.env):Env{return Object.freeze(schema.parse(values));}
 export function readinessConfig(e:Env){return {
-  serviceMode:e.SERVICE_MODE,dataMode:e.DATA_MODE,simulationEnabled:e.DATA_MODE==='mock',
+  serviceMode:e.SERVICE_MODE,dataMode:e.DATA_MODE,simulationEnabled:e.DATA_MODE==='mock',apudVersion:e.APUD_VERSION,
   outboundEnabled:e.DATA_MODE==='mock'?false:e.OUTBOUND_ENABLED,
   demoData:e.DEMO_DATA_ENABLED,demoRecipientCount:e.DEMO_WHATSAPP_RECIPIENTS.length,
   whatsapp:e.WHATSAPP_ENABLED&&Boolean(e.WA_ACCESS_TOKEN&&e.WA_PHONE_NUMBER_ID&&e.WA_APP_SECRET&&e.WA_VERIFY_TOKEN),whatsappTransport:e.WHATSAPP_TRANSPORT,

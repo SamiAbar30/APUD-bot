@@ -20,6 +20,7 @@ import { randomUUID } from 'node:crypto';
 import { redactConversationPii } from '../core/conversation-policy.js';
 import { redactOutboundHistory } from '../core/outbound-history.js';
 import { lastQuestionOf } from '../core/case-memory.js';
+import { closePhaseOne, phaseOneExpired } from '../core/phase-one.js';
 type Receipt = {receipt:Record<string,unknown>;event?:string;patch?:WorkflowPatch;awaitDelivery?:boolean};
 const EffectContextSchema=z.object({
   id:z.string(),version:z.number().int(),dni:z.string(),nombre:z.string(),telefono:z.string(),
@@ -54,6 +55,12 @@ export class ActionExecutor {
       if(!['PENDING','UNCERTAIN'].includes(action.status))return;
       const currentCase=await this.flow.load(action.expedienteId);
       const reconcileOnly=action.status==='UNCERTAIN';
+      if(!reconcileOnly&&this.flow.env.APUD_VERSION===1&&phaseOneExpired(currentCase)&&!currentCase.phaseOneClosedAt){
+        await this.flow.db.$transaction(tx=>closePhaseOne(tx,currentCase,'DEADLINE_REACHED',{source:'OUTBOX_DEADLINE_CHECK'}));return;
+      }
+      if(!reconcileOnly&&(currentCase.phaseOneClosedAt||this.flow.env.APUD_VERSION===1&&['TRIGGER_SEDE_AUTOMATION','CALL_APUDATA_PREAPPROVAL','UPLOAD_KMALEON_DOCUMENT','CREATE_KMALEON_AVISO','NOTIFY_DAYANA'].includes(action.actionType))){
+        await this.flow.db.botApodAccion.update({where:{id},data:{status:'CANCELLED',lastError:currentCase.phaseOneClosedAt?'PHASE_ONE_CLOSED':'APUD_V2_REQUIRED'}});return;
+      }
       const actionPayload=action.payload as Record<string,unknown>;
       const isReminder=typeof actionPayload.reminderDay==='number';
       const humanHandoff=actionPayload.humanHandoff===true&&['HUMAN_HANDOFF_NOTICE','CONVERSATION_REPLY'].includes(String(actionPayload.template))&&currentCase.currentState==='ESCALATED_HUMAN';
@@ -89,6 +96,7 @@ export class ActionExecutor {
       const beforeEffect=async()=>{
         if(signal.aborted)throw new AppError('LOCK_LOST');
         const fresh=await this.flow.load(action.expedienteId);
+        if(!reconcileOnly&&(fresh.phaseOneClosedAt||this.flow.env.APUD_VERSION===1&&phaseOneExpired(fresh)))throw new AppError('PHASE_ONE_CLOSED');
         if(!reconcileOnly&&(fresh.optOutAt||(fresh.automationPaused&&!(humanHandoff&&fresh.currentState==='ESCALATED_HUMAN'))))throw new AppError('AUTOMATION_PAUSED_OR_CLIENT_OPT_OUT');
         if(isConversationReply&&!reconcileOnly&&actionPayload.contextStep!==fresh.stepReached)throw new AppError('CONVERSATION_STEP_CHANGED');
         if(isReminder&&!reconcileOnly&&(actionPayload.reminderCycle!==fresh.reminderCycle||actionPayload.stepReached!==fresh.stepReached||actionPayload.anchor!==fresh.reminderAnchorAt?.toISOString()||!canFollowUp(fresh)||await this.flow.db.botApodInbox.count({where:{expedienteId:fresh.id,status:'PENDING'}})))throw new AppError('FOLLOW_UP_CONTEXT_CHANGED');
@@ -110,6 +118,9 @@ export class ActionExecutor {
           if(updated.count!==1)throw new AdapterError('ACTION_ATTEMPT_CHANGED','uncertain');
           if(completed.awaitDelivery){
             const at=new Date();
+            if(this.flow.env.APUD_VERSION===1&&!current.phaseOneStartedAt&&!current.phaseOneClosedAt){
+              await tx.botApodExpediente.updateMany({where:{id:c.id,phaseOneStartedAt:null},data:{phaseOneStartedAt:at,reminderAnchorAt:at}});
+            }
             if(typeof completed.receipt.historyText==='string'){
               const historyText=redactOutboundHistory(completed.receipt.historyText);
               await tx.botApodMessage.upsert({where:{externalId:`outbox:${id}`},create:{expedienteId:c.id,externalId:`outbox:${id}`,role:'assistant',content:historyText.slice(0,2000),source:'OUTBOX_ACCEPTED'},update:{}});
@@ -117,14 +128,14 @@ export class ActionExecutor {
               if(question)await tx.botApodExpediente.update({where:{id:c.id},data:{pendingQuestion:question,pendingQuestionAt:new Date()}});
             }
             if(current.reminderCycle===c.reminderCycle&&!current.automationPaused&&!current.optOutAt){
-              const anchor=current.reminderAnchorAt??at;
+              const anchor=this.flow.env.APUD_VERSION===1?(current.phaseOneStartedAt??at):(current.reminderAnchorAt??at);
               const day=isReminder?Number(actionPayload.reminderDay):current.lastReminderDay;
-              await tx.botApodExpediente.update({where:{id:c.id},data:{lastOutboundAt:at,reminderAnchorAt:anchor,...(isReminder?{reminderCount:{increment:1},lastReminderDay:day}:{}),nextReminderAt:canFollowUp(current)?nextFollowUp(anchor,day):null}});
+              await tx.botApodExpediente.update({where:{id:c.id},data:{lastOutboundAt:at,...(this.flow.env.APUD_VERSION===1?{phaseOneStartedAt:anchor}:{}),reminderAnchorAt:anchor,...(isReminder?{reminderCount:{increment:1},lastReminderDay:day}:{}),nextReminderAt:canFollowUp(current)?nextFollowUp(anchor,day):null}});
             }
           }
           if(completed.patch?.isProvisionalFiled!==undefined && c.documentId)await tx.botApodDocumento.update({where:{id:c.documentId},data:{uploadedKmaleon:true,kmaleonDocumentId:String(completed.receipt.documentId)}});
           if(current.version!==action.expectedVersion){await tx.botApodAuditLog.create({data:{expedienteId:c.id,event:'EFFECT_CONFIRMED_AFTER_STATE_CHANGE',metadata:json({actionId:id,expectedVersion:action.expectedVersion,currentVersion:current.version})}});}
-          else if(completed.event&&!completed.awaitDelivery)await this.flow.transition(tx,current,completed.event,completed.receipt,completed.patch??{});
+          else if(completed.event&&!completed.awaitDelivery&&!current.phaseOneClosedAt)await this.flow.transition(tx,current,completed.event,completed.receipt,completed.patch??{});
         });
       }catch(error){
         // A database failure after a verified effect never authorizes another send.
@@ -137,7 +148,7 @@ export class ActionExecutor {
         const updated=await this.flow.db.botApodAccion.updateMany({where:{id,...(running?{status:'RUNNING',startedAt}:{status:action.status})},data:{status,receipt:json(receipt),lastError:errorCode(error)}});
         if(updated.count===1&&['FAILED','UNCERTAIN','HUMAN_REQUIRED'].includes(status))await this.queues.deadLetter.add('effect-needs-review',{actionId:id,expedienteId:c.id,code:errorCode(error)},{jobId:`dlq-${id}`,removeOnComplete:false});
         const isFallbackNotice=action.idempotencyKey.startsWith('blocked-notice-');
-        if(updated.count===1&&status==='BLOCKED'&&!isFallbackNotice&&['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA'].includes(action.actionType)&&!c.optOutAt){
+        if(updated.count===1&&status==='BLOCKED'&&!isFallbackNotice&&['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA'].includes(action.actionType)&&!c.optOutAt&&!c.phaseOneClosedAt&&!(this.flow.env.APUD_VERSION===1&&phaseOneExpired(c))){
           await this.flow.db.botApodHumanTask.upsert({where:{dedupeKey:`blocked:${id}`},create:{expedienteId:c.id,dedupeKey:`blocked:${id}`,kind:'CONVERSATION_REVIEW',reason:`Mensaje bloqueado: ${errorCode(error)}`,evidence:json({actionId:id,code:errorCode(error)})},update:{}});
           await this.flow.db.botApodAccion.upsert({where:{idempotencyKey:`blocked-notice-${id}`},create:{expedienteId:c.id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:'Para seguir con este paso necesito que lo revise una persona del despacho. Te escribimos por aquí en cuanto lo tenga.'},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:`blocked-notice-${id}`},update:{}});
         }
@@ -259,7 +270,7 @@ export class ActionExecutor {
       const receipt=action.receipt as Record<string,unknown>;
       await this.flow.db.$transaction(async tx=>{
         await tx.botApodAccion.update({where:{id:a.id},data:{status:'EXECUTED',executedAt:new Date(),receipt:json({...receipt,deliveryStatus:status.status,deliveryTimestamp:status.timestamp})}});
-        if(c.version===a.expectedVersion&&typeof receipt.nextEvent==='string')await this.flow.transition(tx,c,receipt.nextEvent,{messageId:status.id,verified:true,template:receipt.template,deliveryStatus:status.status});
+        if(!c.phaseOneClosedAt&&c.version===a.expectedVersion&&typeof receipt.nextEvent==='string')await this.flow.transition(tx,c,receipt.nextEvent,{messageId:status.id,verified:true,template:receipt.template,deliveryStatus:status.status});
         else if(receipt.nextEvent) await tx.botApodAuditLog.create({data:{expedienteId:c.id,event:'DELIVERY_CONFIRMED_AFTER_STATE_CHANGE',metadata:json({actionId:a.id,messageId:status.id})}});
       });
       return true;

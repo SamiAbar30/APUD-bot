@@ -54,7 +54,7 @@ const TOPICS:Array<{topic:OutsideTopic;test:RegExp}>=[
   // Pressure from the lender or a collections firm.
   {topic:'DOCUMENTS',test:/no puedo conseguir el de|no consigo el de|no me lo dan|no (?:lo )?encuentro el contrato|no tengo el contrato|el contrato no|me piden (?:el )?contrato|no encuentro (?:los |el )?(?:documento|papeles|contrato)/},
   {topic:'CLAIM_DETAIL',test:/asnef|demanda|denunci|prestamo|credito|tarjeta|revolving|interes(?:es)?|deuda|cuota|ingres(?:an|ais|o)|abonar|abono|importe|cuanto (?:dinero |me )?(?:se )?reclam|me reclaman|me reclama\b|quien me reclama|como (?:lo )?(?:pago|abono)|(?:los|el|un|mis|unos) acuerdos?\b|porcentaje|honorarios|salgo de|disposicion judicial|no puedo (?:seguir )?pagar|no he pagado|se cumple el dia|escribir vosotros|llamar a \w+ y decir/},
-  {topic:'OTHER_COMPANY',test:/no me deja entrar|no puedo entrar en|otra(?:s)? (?:dos )?(?:compan|empresa)|recovery|cobradores|no paran de (?:llamar|acosar)|me acosan|me llaman (?:todos los dias|constantemente)|van a demandar|me amenazan|me (?:han )?llam(?:aron|ado|o) (?:de|del)\b|otro despacho|despacho juridico/},
+  {topic:'OTHER_COMPANY',test:/no me deja entrar|no puedo entrar en|otra(?:s)? (?:dos )?(?:compan|empresa)|recovery|cobradores|agencia legal|no paran de (?:llamar|acosar)|me acosan|me llaman (?:todos los dias|constantemente)|van a demandar|me amenazan|me (?:han )?llam(?:aron|ado|o) (?:de|del)\b|otro despacho|despacho juridico/},
 ];
 
 /** Returns the topic only when the message is clearly not about the apoderamiento itself. */
@@ -79,6 +79,8 @@ export function outsideTopicReply(topic:OutsideTopic,text=''):{text:string;requi
   const alreadySent=/ya (?:os |te |les )?(?:lo |la )?(?:he )?(?:envie|envié|enviado|mande|mandado|pase|pasado|pague|pagado)|acabo de (?:enviar|volver a enviar|mandar|pagar)/.test(n);
   switch(topic){
     case 'CLAIM_STATUS':
+      if(/medio ano|6 meses|seis meses|un ano|mucho tiempo|meses sin|llevo esperando/.test(n))
+        return {text:'Entiendo, y llevando tanto tiempo esperando es normal que preguntes. Lo traslado al equipo de reclamaciones para que revisen por dónde va tu caso y te respondan por aquí.',requiresHumanReview:true,handoffReason:'HUMANO'};
       // Clients often ask the cost and the timing in one breath; answer both, invent no dates.
       return {text:asksCost
         ? `El apoderamiento es gratuito si lo haces por tu cuenta. Los plazos y el cobro los lleva el equipo de reclamaciones: escríbeles a ${OFFICE_EMAIL}.`
