@@ -76,7 +76,7 @@ export function approvedRolloutReply(responseId: ConversationRolloutClassificati
     case 'PHASE3_WORKFLOW':
       return 'Hola, soy el asistente virtual de LITIGIOS. ¿Necesitas ayuda con el apoderamiento apud acta?';
     case 'SECURITY_ANSWER':
-      return 'La contraseña solo se utiliza para preparar el apoderamiento en el canal seguro autorizado por el despacho. No la envíes por este chat; si tienes dudas, pide al gestor que te atienda.';
+      return 'La contraseña solo se usa para preparar tu apoderamiento y nada más. Mándame el archivo del certificado por aquí y la contraseña en otro mensaje; no la compartas con nadie fuera del despacho.';
     case 'HUMAN_REVIEW':
       return null;
   }

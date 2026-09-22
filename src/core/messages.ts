@@ -87,7 +87,8 @@ const templates:Record<TemplateId,Renderer>={
     const onMobile=c.certDevice==='MOBILE'||variables?.helpTopic==='COPY_MOBILE'||mobileBranch;
     const attempts=c.certificateHelpAttempts??0;
     if(attempts<=1)return {text:onMobile
-      ?'Vamos a sacar una copia de tu certificado y así lo resolvemos. Abre en el móvil la aplicación donde lo obtuviste y busca «copia de seguridad» o «exportar».'
+      // Protocol 2.2.1: on mobile the copy exists so the office can use it, so ask for it here.
+      ?'Vamos a sacar una copia de tu certificado y así lo resolvemos. Abre en el móvil la aplicación donde lo obtuviste, busca «copia de seguridad» o «exportar» y mándame el archivo por aquí; la contraseña, en otro mensaje.'
       :'Vamos a por una copia de tu certificado y lo resolvemos. ¿La tienes en el ordenador o en una aplicación del móvil?'};
     if(attempts===2)return {text:`${onMobile?'Abre la aplicación del certificado en el móvil y busca «copia de seguridad» o «exportar».':'Busca la copia del certificado en Descargas o en la aplicación donde lo obtuviste.'} Suele ser un archivo .p12 o .pfx.`};
     return {text:'Si no aparece, revisa la opción de copia de seguridad o exportación de esa aplicación y ponle una contraseña al archivo. Después mándame ese archivo por aquí y la contraseña en otro mensaje, y hago yo el apoderamiento.'};
