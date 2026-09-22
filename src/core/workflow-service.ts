@@ -2,7 +2,7 @@ import { Prisma, type PrismaClient, ApodState, type BotApodExpediente } from '@p
 import type Redlock from 'redlock';
 import { randomUUID } from 'node:crypto';
 import { evaluateNextStep } from './decision-engine.js';
-import { caseMemory } from './case-memory.js';
+import { caseMemory, historicalCaseMemory } from './case-memory.js';
 import type { Expediente } from '../domain/models/expediente.js';
 import { EventType, type WorkflowEvent } from '../domain/fsm/states.js';
 import { PdfAuditor } from './pdf-auditor.js';
@@ -11,7 +11,9 @@ import type { DocumentStorage } from '../infrastructure/storage.js';
 import type { Env } from '../config/env.js';
 import { E } from './workflow-events.js';
 import type { KmaleonExpedienteCandidate } from '../contracts/kmaleon.contract.js';
-import { FOLLOW_UP_STATES, stepFor } from './follow-up.js';
+import { FOLLOW_UP_STATES, stepFor, nextFollowUp } from './follow-up.js';
+import { closePhaseOne, phaseOneExpired } from './phase-one.js';
+import { phaseOneReportedOutcome } from './phase-one-intent.js';
 import type { StrictConversationAgent } from './conversation-agent.js';
 import { requiresDeterministicHandoff } from './conversation-policy.js';
 import { relatedConversationText } from './conversation-batching.js';
@@ -23,7 +25,7 @@ export class WorkflowService {
   constructor(readonly db:PrismaClient,readonly redlock:Redlock,readonly storage:DocumentStorage,readonly env:Env) {}
   async locked<T>(id:string,fn:(signal:{aborted:boolean})=>Promise<T>):Promise<T>{return this.redlock.using([`lock:apod:${id}`],180000,fn);}
   async load(id:string):Promise<BotApodExpediente>{const c=await this.db.botApodExpediente.findUnique({where:{id}});if(!c)throw new AppError('CASE_NOT_FOUND',404);return c;}
-  async linkKmaleon(candidate:KmaleonExpedienteCandidate,input:{source:'OPERATOR'|'AVISO_27';triggerId?:string}){
+  async linkKmaleon(candidate:KmaleonExpedienteCandidate,input:{source:'OPERATOR'|'AVISO_27'|'AVISO_24';triggerId?:string}){
     return this.locked(`identity:${candidate.dni}`,async signal=>{
       if(signal.aborted)throw new AppError('LOCK_LOST');
       return this.db.$transaction(async tx=>{
@@ -40,13 +42,14 @@ export class WorkflowService {
         if(row.currentState==='INITIAL_TRIAGE'&&!row.automationPaused&&!row.optOutAt&&!await tx.botApodAuditLog.findFirst({where:{expedienteId:row.id,event:E.start}})){
           await this.transition(tx,row,E.start,{source:input.source,projectId:candidate.projectId});initialContactQueued=true;
         }
-        await tx.botApodAuditLog.create({data:{expedienteId:row.id,event:input.source==='AVISO_27'?'AVISO_27_OBSERVED':'KMALEON_EXPEDIENTE_SELECTED',operator:input.source,metadata:json({projectId:candidate.projectId,triggerId:input.triggerId,created})}});
+        await tx.botApodAuditLog.create({data:{expedienteId:row.id,event:input.source.startsWith('AVISO_')?`${input.source}_OBSERVED`:'KMALEON_EXPEDIENTE_SELECTED',operator:input.source,metadata:json({projectId:candidate.projectId,triggerId:input.triggerId,created})}});
         if(input.triggerId)await tx.botApodTrigger.update({where:{id:input.triggerId},data:{expedienteId:row.id,status:'PROCESSED',processedAt:new Date(),lastError:null}});
         return {...await tx.botApodExpediente.findUniqueOrThrow({where:{id:row.id}}),alreadyLinked:!created,initialContactQueued};
       });
     });
   }
   async transition(tx:Prisma.TransactionClient,c:BotApodExpediente,type:string,payload:Record<string,unknown>={},patch:WorkflowPatch={},operator='SYSTEM_BOT') {
+    if(c.phaseOneClosedAt)throw new AppError('PHASE_ONE_CLOSED',409);
     if(!Object.values(EventType).includes(type as EventType))throw new AppError('UNSUPPORTED_DOMAIN_EVENT',400);
     const document=c.documentId?await tx.botApodDocumento.findUnique({where:{id:c.documentId}}):null;
     if(type===E.delivered){
@@ -66,7 +69,9 @@ export class WorkflowService {
       if(decision.nextStep===ApodState.ESCALATED_HUMAN){combined.previousState=c.currentState;combined.automationPaused=true;combined.nextReminderAt=null;}
       else {
         combined.stepReached=stepFor({...c,...persisted,currentState:decision.nextStep as ApodState});combined.stepEnteredAt=new Date();
-        combined.reminderCycle={increment:1};combined.reminderAnchorAt=null;combined.lastReminderDay=0;combined.reminderCount=0;combined.nextReminderAt=null;
+        combined.reminderCycle={increment:1};
+        if(c.phaseOneStartedAt){combined.reminderAnchorAt=c.phaseOneStartedAt;combined.nextReminderAt=nextFollowUp(c.phaseOneStartedAt,c.lastReminderDay);}
+        else{combined.reminderAnchorAt=null;combined.lastReminderDay=0;combined.reminderCount=0;combined.nextReminderAt=null;}
       }
     }
     if(type===EventType.CLIENT_CERT_FILE_RECEIVED){combined.stepReached='ASISTENCIA_SEGURA';combined.nextReminderAt=null;combined.reminderCycle={increment:1};}
@@ -87,7 +92,7 @@ export class WorkflowService {
     // Once the certificate and its password are in, the bot's part is over: a person prepares the
     // apoderamiento. Stop the automation so no tutorial, reminder or next step follows the client's
     // handover, which would read as if nobody had picked it up.
-    if((payload.handoffReason==='CERTIFICADO_RECIBIDO'||type===EventType.CLIENT_CERT_FILE_RECEIVED)&&!c.optOutAt)
+    if(type===EventType.CLIENT_CERT_FILE_RECEIVED&&!c.optOutAt)
       await tx.botApodExpediente.updateMany({where:{id:c.id,automationPaused:false},data:{automationPaused:true,nextReminderAt:null}});
     return {decision,version:nextVersion};
   }
@@ -97,6 +102,7 @@ export class WorkflowService {
   async intakeDocument(id:string,version:number,buffer:Buffer,sourceId?:string) {
     return this.locked(id,async signal=>{
       const c=await this.load(id);if(c.version!==version)throw new AppError('CASE_CHANGED_RELOAD');if(!c.identityVerified)throw new AppError('IDENTITY_NOT_VERIFIED');
+      if(c.phaseOneClosedAt)throw new AppError('PHASE_ONE_CLOSED',409);
       const stored=await this.storage.save(buffer);if(signal.aborted)throw new AppError('LOCK_LOST');
       const existing=await this.db.botApodDocumento.findUnique({where:{expedienteId_sha256Hash:{expedienteId:id,sha256Hash:stored.sha256}}});
       const canReselectSameDocument=([ApodState.INITIAL_TRIAGE,ApodState.WAITING_PDF_SUBMISSION,ApodState.WAITING_REVOCATION_REISSUE] as ApodState[]).includes(c.currentState);
@@ -134,7 +140,10 @@ export class WorkflowService {
       const {extractedText: _text,...safeReport}=report;
       return this.db.$transaction(async tx=>{
         await tx.botApodDocumento.update({where:{id:doc.id},data:{pageCount:report.pageCount,hasAiram:report.hasAiram,hasPowersArt25:report.missingPowers.length===0,identityMatches:report.identityMatches,rawAuditJson:json({...safeReport,requestId})}});
-        await this.transition(tx,c,E.audit,{...safeReport,documentId:doc.id,sha256:doc.sha256Hash},{auditStatus:report.status,pageCount:report.pageCount});
+        if(c.phaseOneClosedAt){
+          await tx.botApodExpediente.update({where:{id:c.id},data:{auditStatus:report.status,pageCount:report.pageCount,version:{increment:1}}});
+          await tx.botApodHumanTask.upsert({where:{dedupeKey:`late-audit:${doc.id}`},create:{expedienteId:c.id,dedupeKey:`late-audit:${doc.id}`,kind:'DOCUMENT_REVIEW',assignedTo:'DAYANA',reason:'Auditoría terminada tras el cierre de fase 1; revisar el documento sin reactivar mensajes.',evidence:json({documentId:doc.id,status:report.status})},update:{}});
+        }else await this.transition(tx,c,E.audit,{...safeReport,documentId:doc.id,sha256:doc.sha256Hash},{auditStatus:report.status,pageCount:report.pageCount});
       });
     });
   }
@@ -151,13 +160,25 @@ export class WorkflowService {
       const verifiedBytes=await this.storage.read(doc.s3OrLocalPath,doc.sha256Hash);verifiedBytes.fill(0);if(signal.aborted)throw new AppError('LOCK_LOST');
       return this.db.$transaction(async tx=>{
         await tx.botApodDocumento.update({where:{id:documentId},data:{approvedAt:new Date(),approvedBy:input.reviewer,clientReviewedAt:input.clientReviewed?new Date():null,documentType:report.isValid?'APODERAMIENTO_FINAL':'APODERAMIENTO_PROVISIONAL'}});
-        await tx.botApodHumanTask.updateMany({where:{expedienteId:id,dedupeKey:`DOCUMENT_REVIEW:${id}:${documentId}`,status:'OPEN'},data:{status:'RESOLVED',resolvedAt:new Date(),resolvedBy:input.reviewer,resolutionRef:input.evidenceRef}});
+        await tx.botApodHumanTask.updateMany({where:{expedienteId:id,dedupeKey:{in:[`DOCUMENT_REVIEW:${id}:${documentId}`,`late-audit:${documentId}`]},status:'OPEN'},data:{status:'RESOLVED',resolvedAt:new Date(),resolvedBy:input.reviewer,resolutionRef:input.evidenceRef}});
+        if(this.env.APUD_VERSION===1&&c.phaseOneClosedAt){
+          const evidence={documentId,sha256:input.sha256,evidenceRef:input.evidenceRef,clientEvidenceRef:input.clientEvidenceRef,documentReviewed:true,priorOutcome:c.phaseOneOutcome,priorEvidence:c.phaseOneEvidence,legalFilingVerified:false};
+          await tx.botApodExpediente.update({where:{id},data:{documentApproved:true,clientReviewed:true,version:{increment:1},...(report.isValid?{phaseOneOutcome:'PDF_RECEIVED',phaseOneEvidence:json(evidence)}:{})}});
+          await tx.botApodHumanTask.upsert({where:{dedupeKey:`phase-one-document:${documentId}`},create:{expedienteId:id,dedupeKey:`phase-one-document:${documentId}`,kind:'PHASE_ONE_DOCUMENT_REVIEW',assignedTo:'DAYANA',reason:report.isValid?'Documento revisado tras finalizar la fase 1; el bot permanece en silencio.':'Documento provisional revisado tras finalizar la fase 1; continuar su corrección manualmente.',evidence:json(evidence)},update:{}});
+          return {status:'PHASE_ONE_CLOSED',version:c.version+1};
+        }
+        if(this.env.APUD_VERSION===1&&report.isValid){
+          await tx.botApodExpediente.update({where:{id},data:{documentApproved:true,clientReviewed:true}});
+          await closePhaseOne(tx,c,'PDF_RECEIVED',{documentId,sha256:input.sha256,evidenceRef:input.evidenceRef,clientEvidenceRef:input.clientEvidenceRef??null,documentReviewed:true},input.reviewer);
+          return {status:'PHASE_ONE_CLOSED',version:c.version+1};
+        }
         return this.transition(tx,c,E.approve,{documentId,sha256:input.sha256,reviewer:input.reviewer,evidenceRef:input.evidenceRef,clientEvidenceRef:input.clientEvidenceRef},{documentApproved:true,clientReviewed:input.clientReviewed},input.reviewer);
       });
     });
   }
   async recoverCase(id:string,version:number,reason:string){
     return this.locked(id,async signal=>{const c=await this.load(id);if(c.version!==version||signal.aborted)throw new AppError('CASE_CHANGED_RELOAD');
+      if(c.phaseOneClosedAt||this.env.APUD_VERSION===1&&phaseOneExpired(c))throw new AppError('PHASE_ONE_CLOSED',409);
       if(c.currentState!==ApodState.ESCALATED_HUMAN)throw new AppError('CASE_NOT_ESCALATED');
       if(c.optOutAt)throw new AppError('CLIENT_OPT_OUT_REQUIRES_NEW_CONSENT');
       const target=c.previousState;
@@ -166,7 +187,8 @@ export class WorkflowService {
         const result=await this.transition(tx,c,E.resume,{operatorId:'OPERATOR',targetState:target,reason},{automationPaused:false},'OPERATOR');
         if(result.decision.nextStep===ApodState.ESCALATED_HUMAN)throw new AppError('SAVED_STEP_REQUIRES_OPERATOR_REVIEW');
         await tx.botApodAccion.updateMany({where:{expedienteId:id,status:{in:['PENDING','BLOCKED','HUMAN_REQUIRED']}},data:{status:'CANCELLED',lastError:'OPERATOR_RESUMED_SAVED_STEP'}});
-        await tx.botApodExpediente.update({where:{id},data:{stepReached:c.stepReached,reminderAnchorAt:new Date(),nextReminderAt:FOLLOW_UP_STATES.has(target as ApodState)?new Date(Date.now()+3*86400000):null}});
+        const anchor=c.phaseOneStartedAt??new Date();
+        await tx.botApodExpediente.update({where:{id},data:{stepReached:c.stepReached,reminderAnchorAt:anchor,nextReminderAt:FOLLOW_UP_STATES.has(target as ApodState)?nextFollowUp(anchor,c.phaseOneStartedAt?c.lastReminderDay:0):null}});
         return {id,version:result.version,resumedState:result.decision.nextStep};
       });});
   }
@@ -185,13 +207,23 @@ export class WorkflowService {
       const row=await this.db.botApodInbox.findUniqueOrThrow({where:{id:candidate.id}});
       if(row.status!=='PENDING')continue;
       if(row.notBefore.getTime()>Date.now())return;
-      // Finish the previous reply before consuming another client turn. This
-      // prevents rapid messages from making an unsent tutorial/action stale.
-      if(await this.db.botApodAccion.count({where:{expedienteId:id,actionType:{in:['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA']},status:{in:['PENDING','RUNNING','UNCERTAIN']}}}))return;
+      const stopped=await this.locked(id,async signal=>{
+        if(signal.aborted)throw new AppError('LOCK_LOST');
+        const c=await this.load(id);
+        if(!c.phaseOneClosedAt&&!(this.env.APUD_VERSION===1&&phaseOneExpired(c)))return false;
+        await this.db.$transaction(async tx=>{
+          if(!c.phaseOneClosedAt)await closePhaseOne(tx,c,'DEADLINE_REACHED',{source:'INBOUND_DEADLINE_CHECK'});
+          await tx.botApodInbox.updateMany({where:{id:row.id,status:'PENDING'},data:{status:'HUMAN_REQUIRED',lastError:'PHASE_ONE_CLOSED',processedAt:new Date()}});
+          await tx.botApodHumanTask.upsert({where:{dedupeKey:`phase-one-late:${row.id}`},create:{expedienteId:id,dedupeKey:`phase-one-late:${row.id}`,kind:'CONVERSATION_REVIEW',assignedTo:'DAYANA',reason:'Nuevo mensaje tras finalizar la fase 1; el bot permanece en silencio.',evidence:json({inboxId:row.id})},update:{}});
+        });
+        return true;
+      });
+      if(stopped)continue;
       if(row.eventType==='PDF_MEDIA'){
         try{await handleMedia(id,(row.payload as Record<string,string>).mediaId!,row.externalId);await this.db.botApodInbox.updateMany({where:{id:row.id,status:'PENDING'},data:{status:'PROCESSED',processedAt:new Date()}});}catch{await this.db.botApodInbox.updateMany({where:{id:row.id,status:'PENDING'},data:{status:'HUMAN_REQUIRED',lastError:'PDF_PROCESSING_FAILED'}});}continue;
       }
       await this.locked(id,async signal=>{const fresh=await this.db.botApodInbox.findUniqueOrThrow({where:{id:row.id}});if(fresh.status!=='PENDING'||fresh.notBefore.getTime()>Date.now()||signal.aborted)return;const c=await this.load(id);
+        if(c.phaseOneClosedAt){await this.db.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'PHASE_ONE_CLOSED',processedAt:new Date()}});return;}
         // One quiet-period burst is one conversation turn. Keep each durable inbox
         // row and user message; commit all consumed statuses with the one decision.
         const turnRows=[fresh];
@@ -210,6 +242,17 @@ export class WorkflowService {
         let eventType=row.eventType;let eventPayload=row.payload as Record<string,unknown>;
         if(eventType==='CONVERSATION_TEXT'){
           if(!c.identityVerified){await this.db.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'IDENTITY_NOT_VERIFIED'}});return;}
+          const reportedText=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')).join('\n');
+          const previousAssistant=await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',createdAt:{lt:row.createdAt}},orderBy:[{createdAt:'desc'},{id:'desc'}],select:{content:true}});
+          const reported=this.env.APUD_VERSION===1&&!c.optOutAt?phaseOneReportedOutcome(reportedText,{currentState:c.currentState,pendingQuestion:c.pendingQuestion,lastAssistantText:previousAssistant?.content}):null;
+          if(reported){
+            await this.db.$transaction(async tx=>{
+              await closePhaseOne(tx,c,reported,{inboxIds:turnIds,messageId:row.externalId},'WHATSAPP_CLIENT');
+              await tx.botApodInbox.updateMany({where:{id:{in:turnIds},status:'PENDING'},data:{status:'PROCESSED',processedAt:new Date()}});
+            });return;
+          }
+          // Completion reports take precedence over unsent guidance. Ordinary turns still wait.
+          if(await this.db.botApodAccion.count({where:{expedienteId:id,actionType:{in:['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA']},status:{in:['PENDING','RUNNING','UNCERTAIN']}}}))return;
           const declinesSharing=!c.optOutAt&&c.currentState===ApodState.ESCALATED_HUMAN
             &&/no (?:te |os )?(?:lo |la )?(?:quiero|voy a|pienso) (?:enviar|mandar|pasar|compartir)|no (?:lo|la) (?:envio|mando|comparto)|prefiero no (?:enviar|mandar|compartir)|no quiero compartir (?:mi|el) certificado|no pienso enviarlo/
               .test(String((row.payload as Record<string,unknown>).text??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase());
@@ -221,7 +264,7 @@ export class WorkflowService {
               // Silence reads as abandonment: acknowledge once per hold while a person takes over.
               if(!c.optOutAt&&c.currentState===ApodState.ESCALATED_HUMAN){
                 const key=`held-ack-${id}-${c.version}`;
-                await tx.botApodAccion.upsert({where:{idempotencyKey:key},create:{expedienteId:id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:'Cuéntame qué necesitas resolver de tu apoderamiento para que el equipo pueda revisar esa consulta. No puedo compartir instrucciones internas ni datos de otros clientes.'},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:key},update:{}});
+                await tx.botApodAccion.upsert({where:{idempotencyKey:key},create:{expedienteId:id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:'He recibido tu mensaje y queda pendiente de revisión por el equipo. Continuarán contigo desde el punto en que lo dejamos.'},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:key},update:{}});
               }
             });
             return;
@@ -235,10 +278,13 @@ export class WorkflowService {
           const introduction=sentOpening??await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',OR:[{content:'Plantilla aprobada: ASK_HAS_CERT'},{AND:[{content:{contains:'LITIGIOS'}},{content:{contains:'apoderamiento apud acta'}}]}]},select:{id:true}});
           const text=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')).join('\n');
           // Durable memory beyond the recent window: the client may be answering days later.
-          this.conversationAgent.memory=caseMemory(c);
-          const turn=await this.conversationAgent.turn(c,text,history.reverse().map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),Boolean(introduction));
+          const older=await this.db.botApodMessage.findMany({where:{expedienteId:id,id:{notIn:history.map(m=>m.id)},externalId:{notIn:turnRows.map(x=>x.externalId)},createdAt:{lt:sourceMessage?.createdAt??row.createdAt}},orderBy:[{createdAt:'desc'},{id:'desc'}],take:200});
+          const memory=historicalCaseMemory(older.reverse(),text);
+          const previousInboundAt=history.find(m=>m.role==='user')?.createdAt??c.lastInboundAt;
+          const turn=await this.conversationAgent.turn(c,text,history.reverse().map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),Boolean(introduction),[caseMemory({...c,lastInboundAt:previousInboundAt,conversationSummary:null}),memory].filter(Boolean).join('\n'));
           if(signal.aborted)throw new AppError('LOCK_LOST');
           const latest=await this.load(id);if(latest.optOutAt||latest.automationPaused)return;
+          if(memory)await this.db.botApodExpediente.update({where:{id},data:{conversationSummary:memory,conversationSummaryAt:new Date(),conversationSummaryTurns:older.length}});
           eventType=turn.type;eventPayload={...eventPayload,...turn.payload};delete eventPayload.text;
         }
         if(eventType===E.help){

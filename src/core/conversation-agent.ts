@@ -83,6 +83,7 @@ export class StrictConversationAgent {
     expediente: CaseContext,
     text: string,
     history: readonly ConversationHistoryMessage[] = [],
+    memory: string | undefined = this.memory,
   ): Promise<ConversationClassification> {
     const local = classifyClientText(expediente, text);
     const deviceEvidence=(choice:ConversationClassification):ConversationClassification=>{
@@ -123,7 +124,7 @@ export class StrictConversationAgent {
         allowedOptions: allowedConversationOptions(expediente),
         text,
         history: boundedConversationHistory(history),
-        ...(this.memory?{caseMemory:this.memory}:{}),
+        ...(memory?{caseMemory:memory}:{}),
       });
       return deviceEvidence(validateModelClassification(expediente, proposed));
     } catch {
@@ -140,6 +141,7 @@ export class StrictConversationAgent {
     expediente: CaseContext,
     text: string,
     history: readonly ConversationHistoryMessage[] = [],
+    memory: string | undefined = this.memory,
   ): Promise<ConversationReply> {
     const rollout = this.classifyRollout(text);
     const local = classifyClientText(expediente, text);
@@ -172,7 +174,7 @@ export class StrictConversationAgent {
           text,
           history: boundedConversationHistory(history),
           helpProgress:{digitalAttempts:expediente.digitalHelpAttempts??0,certificateAttempts:expediente.certificateHelpAttempts??0},
-          ...(this.memory?{caseMemory:this.memory}:{}),
+          ...(memory?{caseMemory:memory}:{}),
         });
         const validated = validateModelReply(proposed);
         if (validated) {
@@ -197,13 +199,13 @@ export class StrictConversationAgent {
   }
 
   /** Shared by the durable webhook worker and the real-provider evaluator. */
-  async turn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[]=[],introduced=history.some(m=>m.role==='assistant'&&/LITIGIOS/i.test(m.content)&&/apoderamiento apud acta/i.test(m.content))):Promise<{type:EventType;payload:Record<string,unknown>}>{
+  async turn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[]=[],introduced=history.some(m=>m.role==='assistant'&&/LITIGIOS/i.test(m.content)&&/apoderamiento apud acta/i.test(m.content)),memory:string|undefined=this.memory):Promise<{type:EventType;payload:Record<string,unknown>}>{
     const guidanceDocumentType=declaredDocumentType(text)??history.filter(m=>m.role==='user').map(m=>declaredDocumentType(m.content)).filter(Boolean).at(-1);
-    const result=await this.decideTurn(expediente,text,history,introduced);
+    const result=await this.decideTurn(expediente,text,history,introduced,memory);
     return guidanceDocumentType?{...result,payload:{...result.payload,guidanceDocumentType}}:result;
   }
 
-  private async decideTurn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[],introduced:boolean):Promise<{type:EventType;payload:Record<string,unknown>}>{
+  private async decideTurn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[],introduced:boolean,memory:string|undefined=this.memory):Promise<{type:EventType;payload:Record<string,unknown>}>{
     const n=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
     let reply:ConversationReply|undefined;
     const yielded=this.phase===3&&!requiresDeterministicHandoff(text)?conversationYield(text)??undefined:undefined;
@@ -335,8 +337,12 @@ export class StrictConversationAgent {
     const describesBlocker=/solo (?:me )?(?:aparece|sale)|no (?:me )?(?:deja|aparece|sale|funciona|carga|abre)|no tengo el codigo|no encuentro (?:la opcion|el boton|donde)|se (?:cierra|bloquea|queda)|me da error|sale (?:un )?error|no me lo permite/.test(n);
     // Protocol 1.2 / 2.2: the moment the client is stuck, the office offers to do it. This used to
     // wait for a previous help attempt, so most stuck clients never heard the offer at all.
-    if(!reply&&describesBlocker&&!/otras? (?:dos )?(?:compan|empresa)|compania|prestamo|entrar en \w+$/.test(n))
-      reply={text:takeoverOffer(expediente,'Entiendo, ahí se ha atascado.'),requiresHumanReview:true,handoffReason:'FALTA_DATO'};
+    if(!reply&&describesBlocker&&!/otras? (?:dos )?(?:compan|empresa)|compania|prestamo|entrar en \w+$|autofirma|sede judicial|navegador|chrome|firefox|java/.test(n))
+      // The offer goes out on the first hiccup, but one failed step is not yet a case for a
+      // person: escalate only once we have already tried to help.
+      reply=(expediente.digitalHelpAttempts??0)>=1||(expediente.certificateHelpAttempts??0)>=1
+        ?{text:takeoverOffer(expediente,'Entiendo, ahí se ha atascado.'),requiresHumanReview:true,handoffReason:'FALTA_DATO'}
+        :{text:takeoverOffer(expediente,'Entiendo, ahí se ha atascado.'),requiresHumanReview:false};
     // The message is about the claim, a charge or a letter: answer that, do not pivot to the
     // certificate. Measured on real messages, this was the largest single failure.
     // A frustrated client needs the office to take the next step, not another task.
@@ -395,10 +401,10 @@ export class StrictConversationAgent {
     if(!reply&&this.phase===3){const guidance=guidanceRequest(expediente,text);if(guidance)return guidance;}
     if(!reply&&this.phase===3)reply=reviewedConversationReply(expediente,text)??undefined;
     if(!reply){
-      const choice=await this.classify(expediente,text,history);
+      const choice=await this.classify(expediente,text,history,memory);
       if(choice.kind==='OPTION'){
         return {type:choice.eventType,payload:{conversationOption:choice.optionId,conversationConfidence:choice.confidence}};
-      }else reply=await this.respond(expediente,text,history);
+      }else reply=await this.respond(expediente,text,history,memory);
     }
     const flatten=(value:string)=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9? ]/g,' ').replace(/\s+/g,' ').trim();
     const lastOfficeMessage=[...history].reverse().find(m=>m.role==='assistant')?.content;

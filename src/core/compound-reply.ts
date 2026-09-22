@@ -24,7 +24,7 @@ export function nextStepSentence(hasDigitalCert:boolean|null):string{
 const CLOSED=/dejo de escribirte|llama al 112|no me envies|no debes compartirla|no puedo compartir instrucciones|que te llame|para que la llamen|siento mucho/;
 
 /** The client is stuck or lost, which protocol 1.2 / 2.2 answers with the office taking over. */
-const STUCK=/no entiendo|no lo entiendo|no se como|no se que hacer|no puedo|no me deja|no consigo|no me aclaro|me atasco|no se de que|ayudame|puedes ayudarme|no sabria/;
+const STUCK=/no entiendo|no lo entiendo|no se como|no se que hacer|no puedo|no me deja|no consigo|no me aclaro|me atasco|no se de que|ayudame|puedes ayudarme|no sabria|no funciona|me da error|da error/;
 /** …unless the subject is the claim itself, where the certificate is not the answer. */
 const CLAIM_SUBJECT=/asnef|reclamaci|deuda|intereses|pagar|pagado|cobro|cobrar|factura|expediente|demanda|contrato|importe/;
 
@@ -65,7 +65,7 @@ export function completeReply(clientText:string,replyText:string,hasDigitalCert?
   if(/hay novedades|alguna novedad|como va (?:mi|el) (?:caso|expediente|reclamacion)/.test(n)&&!/reclamaciones@/.test(r))
     additions.push(`Las novedades de tu expediente te las confirma el equipo en ${OFFICE_EMAIL}.`);
   if(/que coste|cuanto (?:cuesta|vale|costaria)|coste tiene/.test(n)&&!/gratuit|35/.test(r))
-    additions.push('Y el apoderamiento es gratuito si lo firmas tú; solo cuesta 35 € si lo gestiona la empresa colaboradora.');
+    additions.push('El apoderamiento es gratuito por tu cuenta; la gestión con la empresa colaboradora es opcional y tiene un coste que se confirma antes de contratar.');
   if(/puedo llamar a \w+|hablar con ellos|escribir vosotros/.test(n)&&!/negoci|con ellos/.test(r))
     additions.push('Y con ellos no negocies tú: cuéntaselo al equipo y te dicen cómo responderles.');
   // A reply that hands the subject to someone else still has to leave our own step visible,
@@ -79,7 +79,7 @@ export function completeReply(clientText:string,replyText:string,hasDigitalCert?
   // Someone telling you about their illness, their job or their family is not asking for a step.
   // Answer the person first; the instruction that follows then reads as help, not as deafness.
   const opensUp=/me recuperare|lo estoy pasando|estoy fatal|estoy sol|no puedo mas|me han despedido|sin trabajo|me voy a ver|mi madre|mi padre|mi hijo|estoy enferm|operacion|me da verguenza/.test(n);
-  const prefix=opensUp&&!/siento|entiendo|animo|cuidate|gracias por contarm/.test(r)
+  const prefix=opensUp&&!CLOSED.test(r)&&!/siento|entiendo|animo|cuidate|gracias por contarm/.test(r)
     ?'Entiendo, y gracias por contármelo; no hay ninguna prisa con esto. ':'';
   if(!additions.length&&!prefix)return replyText;
   return prefix+[replyText.trim(),...additions.slice(0,2)].join(' ');

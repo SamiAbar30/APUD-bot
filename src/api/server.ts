@@ -23,6 +23,7 @@ import { ApudataCallbackSchema } from '../contracts/apudata.contract.js';
 import { automationRoutes } from './automation.routes.js';
 import { boundedConversationHistory, redactConversationPii } from '../core/conversation-policy.js';
 import { assistedRoutes } from './assisted.routes.js';
+import { phaseOneRoutes } from './phase-one.routes.js';
 import { addressRoutes } from './address.routes.js';
 import type { ReplyButtonId } from '../contracts/whatsapp.contract.js';
 import { StrictConversationAgent } from '../core/conversation-agent.js';
@@ -99,6 +100,7 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
     });
     await automationRoutes(api,flow,effectiveConversationAiStatus);
     await assistedRoutes(api,flow,executor);
+    await phaseOneRoutes(api,flow);
     await addressRoutes(api,flow,executor);
     api.get('/setup',async()=>({...readinessConfig(env),runtime:'Node.js 22',validation:env.DATA_MODE==='mock'?'SETUP_WITH_MOCK_DATA':'REAL_EXTERNAL_E2E_PENDING'}));
     api.get('/emulator/activity',async()=>{
@@ -106,7 +108,7 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
       return conversationActivity(flow.db,env.DEMO_WHATSAPP_RECIPIENTS[0]??'',env.CONVERSATION_QUIET_MS);
     });
     api.get('/agent/status',async()=>({name:'APUD_agent',provider:env.CONVERSATION_AI_PROVIDER,model:conversationAi.config?.model,mode:env.AI_MODE,trainingMethod:'SYSTEM_PROMPT_AND_RETRIEVED_FEW_SHOT',retrieval:conversationModel?await conversationModel.retrievalStatus():'NO_MODEL',fineTuned:false,referenceStatus:referenceAgent.status,packageHash:referenceAgent.context?.packageHash,corpus:referenceAgent.context?.training,usableStyleExamples:referenceAgent.context?.dataset?.examples.length,pendingPlaceholders:referenceAgent.context?.todoPlaceholders,masterWorkflow:'AVISO27_MACRO10_DAYANA',conversationPhase:env.CONVERSATION_PHASE}));
-    api.get('/capabilities',async()=>({operatorEvents,consentVersion:env.CONSENT_VERSION,consentConfigured:!!env.CONSENT_TEXT_FILE,documentRejection:true,initialContact:'CASE_OPENED -> approved WhatsApp question',documentsRequiredAtStart:false,conversationPolicy:'REVIEWED_SUPPORT_PLUS_STRICT_WORKFLOW',conversationPhase:env.CONVERSATION_PHASE,conversationProvider:env.CONVERSATION_AI_PROVIDER,conversationModel:conversationAiEnabled&&conversationAi.status==='CONFIGURED'?conversationAi.config.model:'LOCAL_POLICY_ONLY',aiMode:env.AI_MODE,conversationAiStatus:effectiveConversationAiStatus,referenceAgentStatus:referenceAgent.status,referenceAgentPackage:referenceAgent.context?.packageName??null,referenceAgentTraining:referenceAgent.context?.training??null,kmaleonSearch:!!executor.adapters.kmaleon,kmaleonAddressLookup:executor.adapters.kmaleon?.addressLookupConfigured===true,assistedDraftEnabled:env.OUTBOUND_ENABLED&&!!executor.adapters.sede,assistedCertificate:executor.adapters.sede?'POST /api/cases/:id/assisted-draft':'NOT_CONFIGURED',productionVerified:false}));
+    api.get('/capabilities',async()=>({operatorEvents,consentVersion:env.CONSENT_VERSION,consentConfigured:!!env.CONSENT_TEXT_FILE,documentRejection:true,initialContact:'CASE_OPENED -> approved WhatsApp question',documentsRequiredAtStart:false,conversationPolicy:'REVIEWED_SUPPORT_PLUS_STRICT_WORKFLOW',conversationPhase:env.CONVERSATION_PHASE,conversationProvider:env.CONVERSATION_AI_PROVIDER,conversationModel:conversationAiEnabled&&conversationAi.status==='CONFIGURED'?conversationAi.config.model:'LOCAL_POLICY_ONLY',aiMode:env.AI_MODE,conversationAiStatus:effectiveConversationAiStatus,referenceAgentStatus:referenceAgent.status,referenceAgentPackage:referenceAgent.context?.packageName??null,referenceAgentTraining:referenceAgent.context?.training??null,kmaleonSearch:!!executor.adapters.kmaleon,kmaleonAddressLookup:executor.adapters.kmaleon?.addressLookupConfigured===true,apudVersion:env.APUD_VERSION,phaseOneCredentialIntakeEnabled:Boolean(env.APUD_CREDENTIAL_KEY),assistedDraftEnabled:env.APUD_VERSION===2&&env.OUTBOUND_ENABLED&&!!executor.adapters.sede,assistedCertificate:env.APUD_VERSION===2&&executor.adapters.sede?'POST /api/cases/:id/assisted-draft':'NOT_CONFIGURED',productionVerified:false}));
     api.get('/kmaleon/search',async request=>{
       const adapter=executor.adapters.kmaleon;if(!adapter)throw new AppError('KMALEON_NOT_CONFIGURED',503);
       const query=kmaleonSearch.parse(request.query);return adapter.searchExpedientes({field:query.field,query:query.q,page:query.page});
@@ -208,11 +210,8 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
           if(env.CONVERSATION_PHASE===3&&!m.buttonId&&(m.text||m.media?.mimeType!=='application/pdf')){
             const text=m.text?redactConversationPii(m.text):/pkcs12/i.test(m.media?.mimeType??'')||/\.(?:p12|pfx)$/i.test(m.media?.filename??'')?'[CONTENIDO_SENSIBLE_OMITIDO]':'El cliente ha enviado un adjunto que requiere revisión de una persona.';
             const stop=/^(?:stop|baja|no me escribas(?: más| mas)?|no quiero seguir|dejad de escribirme|cancelar contacto)[.! ]*$/i.test(text.trim());
-            // The office works with the client's certificate, so what the client actually wrote is
-            // kept on the durable inbox row for the gestor. The conversation history the model
-            // reads stays redacted: the client's secret never reaches the provider.
-            const operatorText=m.text&&m.text!==text?m.text:undefined;
-            await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:stop?EventType.CLIENT_OPT_OUT:'CONVERSATION_TEXT',payload:{messageId:m.id,timestamp:m.timestamp,text,...(operatorText?{operatorText}:{}),...(textHash?{messageSha256:textHash}:{}),...(m.media?{mediaId:m.media.id,mediaType:m.media.mimeType}:{})},source:'WHATSAPP',conversationText:text});
+            // Secret chat text is never retained in the ordinary inbox or sent to the model.
+            await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:stop?EventType.CLIENT_OPT_OUT:'CONVERSATION_TEXT',payload:{messageId:m.id,timestamp:m.timestamp,text,...(textHash?{messageSha256:textHash}:{}),...(m.media?{mediaId:m.media.id,mediaType:m.media.mimeType}:{})},source:'WHATSAPP',conversationText:text});
             continue;
           }
           const history=c?boundedConversationHistory((await flow.db.botApodMessage.findMany({where:{expedienteId:c.id},orderBy:[{createdAt:'desc'},{id:'desc'}],take:12})).reverse().map(x=>({role:x.role==='user'?'user' as const:'assistant' as const,content:x.content}))):[];
