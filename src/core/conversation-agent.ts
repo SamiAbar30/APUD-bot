@@ -223,6 +223,12 @@ export class StrictConversationAgent {
     if(/no (?:te |os )?(?:lo |la )?(?:quiero|voy a|pienso) (?:enviar|mandar|pasar|compartir|dar)|no (?:lo|la) (?:envio|mando|comparto|doy)|prefiero no (?:enviar|mandar|compartir|dar)|no me fio de (?:enviar|mandar|compartir)|no quiero (?:compartir|dar|enviar) (?:mi|el|la) (?:certificad\S*|contrase\S*|clave)|no pienso (?:enviarlo|darla|pasarla)|no te doy (?:mi|la) contrase/.test(n)
       &&/certificad|archivo|copia|contrase|clave|\bp12\b|\bpfx\b|lo\b/.test(n))
       return {type:EventType.CLIENT_CONSENT_DENIED,payload:{conversationOption:'CONSENT_NO',conversationConfidence:'NORMALIZED'}};
+    // "No quiero hacerlo, te mando el certificado y lo haces tú" has to MOVE the case into the
+    // assisted branch. Answering with text alone left the state untouched, so the next turn served
+    // the tutorial again and the client repeated themselves four times (manager test 22 Sep).
+    // Clients switch to English mid-thread, so both languages are matched here.
+    if(/(?:te|os) (?:lo |la |el )?(?:env[ií]o|envio|mando|paso|doy)[^.!?]{0,40}(?:certificad|contrase)|(?:certificad|contrase)[^.!?]{0,40}(?:te|os) (?:lo |la )?(?:env[ií]o|mando|paso)|hazlo tu|lo haces tu|hacedlo vosotros|quiero que lo hagas tu|do it for me|you do it|take my certificad|i (?:will )?(?:send|give) (?:you )?(?:the |my )?certificad|i gave you (?:the |my )?certificad|send (?:you )?(?:the |my )?certificate/.test(n))
+      return {type:EventType.CLIENT_REQUESTS_ASSISTANCE,payload:{conversationOption:'NEEDS_ASSISTANCE',conversationConfidence:'NORMALIZED',takeoverRequested:true}};
     // "Dejad de escribirme" must be honoured and acknowledged, never answered with a security notice.
     if(/\b(?:stop|parar|cancelar|baja)\b|no me escrib|dejad de escribir|dejen de escribir|no quiero seguir|no me interesa|borra(?:d|r) mis datos/.test(n))reply={text:'Entendido, dejo de escribirte sobre este trámite. Si más adelante quieres retomarlo, escríbenos por aquí y seguimos.',requiresHumanReview:true,handoffReason:'HUMANO'};
     if(/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)&&!requiresDeterministicHandoff(text))reply={text:'No me envíes códigos SMS, PIN ni claves bancarias. El PIN de tu DNI electrónico lo usas solo tú en tu equipo, nunca por aquí.',requiresHumanReview:false};
@@ -390,7 +396,7 @@ export class StrictConversationAgent {
     if(!reply&&/estafa|timo|fraude|es seguro|es fiable|no me fio|me fio|scam|suplanta/.test(n))reply={text:/contrase|certificad/.test(n)
       ?`Tranquilo, y gracias por la confianza. Mándame el archivo del certificado y, en otro mensaje, su contraseña, y yo hago el apoderamiento; nunca te pediremos dinero ni datos bancarios por aquí.`
       :`Entiendo la duda: puedes confirmar este mensaje con la oficina por un contacto que ya conozcas. El apoderamiento por tu cuenta es gratuito en la Sede Judicial (${officialLinks.sede}) y nunca te pediremos datos bancarios ni dinero. Si lo prefieres, lo tramitamos nosotros y tú no tienes que hacer nada.`,requiresHumanReview:false};
-    const copyLocated=/ya (?:lo |la )?(?:tengo|tenia|encontre|he encontrado|localice|he localizado)|lo tengo (?:localizado|descargado|guardado|aqui)|ya (?:esta|lo tengo) (?:descargado|localizado|guardado)|esta descargado|estaba en (?:mis |la |el )?(?:documentos|carpeta|descargas|archivos)|lo (?:encontre|he encontrado)|descargado en (?:mi|el) movil|i (?:have|found) (?:the file|the copy)/.test(n);
+    const copyLocated=/i (?:have|found) it|already have it|got it now|ya (?:lo |la )?(?:tengo|tenia|encontre|he encontrado|localice|he localizado)|lo tengo (?:localizado|descargado|guardado|aqui)|ya (?:esta|lo tengo) (?:descargado|localizado|guardado)|esta descargado|estaba en (?:mis |la |el )?(?:documentos|carpeta|descargas|archivos)|lo (?:encontre|he encontrado)|descargado en (?:mi|el) movil|i (?:have|found) (?:the file|the copy)/.test(n);
     if(!reply&&(expediente.certificateHelpAttempts??0)>0&&(copyLocated||expediente.certificateHelpAttempts===2&&/^(?:si|yes)[.!\s]*$/.test(n)))
       return {type:EventType.CLIENT_REQUESTS_ASSISTANCE,payload:{copyLocated:true}};
     if(!reply&&(expediente.certificateHelpAttempts??0)>0){

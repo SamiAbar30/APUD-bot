@@ -354,6 +354,8 @@ function guidedHelp(ctx: Ctx): TransitionResult {
   });
   if (hasCert && ctx.payload.copyLocated === true) return toConsentRequest(ctx, 'Client located the certificate copy: ask for consent to prepare it for them');
   if (!hasCert && ctx.exp.hasDigitalCert === false && attempts >= 3 && failed) return fallback();
+  if (hasCert && ctx.type === EventType.CLIENT_REQUESTS_ASSISTANCE && ctx.payload.takeoverRequested === true && copyAttempts > 0)
+    return toConsentRequest(ctx, 'Client asked the office to take it over after the copy help: move to assisted processing');
   if (hasCert && (copyAttempts > 0 || attempts >= 3 || ctx.type === EventType.CLIENT_HAS_NO_PC)) {
     if (copyAttempts >= 3 && failed) return fallback();
     return decide(ctx, ctx.exp.currentState, message(TemplateId.CERTIFICATE_COPY_HELP, { helpTopic:String(ctx.payload.helpTopic??'') }), {
@@ -494,6 +496,10 @@ const mobileAssistConsentRequested: Handler = (ctx) => {
         blocking: [BlockingCondition.CLIENT_REVIEW_REQUIRED],
       });
     }
+    case EventType.CLIENT_REQUESTS_ASSISTANCE:
+      return decide(ctx, State.MOBILE_ASSIST_CONSENT_REQUESTED, buttons(TemplateId.ASSIST_CONSENT_REQUEST, [ReplyButton.CONSENT_YES, ReplyButton.CONSENT_NO]), {
+        note: 'Consent answer could not be tied to its request: ask again rather than leaving the client without a reply',
+      });
     case EventType.CLIENT_CONSENT_DENIED:
       return decide(ctx, State.FALLBACK_OPTIONS, buttons(TemplateId.FALLBACK_OPTIONS,[ReplyButton.COURT_APPOINTMENT,ReplyButton.APUDATA_REQUEST,ReplyButton.HUMAN_HELP]),{discard:true,note:'Assistance declined: offer both alternatives',patch:{consentGranted:false,consentGrantedAt:null}});
     case EventType.CLIENT_HAS_CERT_PC:

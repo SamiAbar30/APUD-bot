@@ -52,8 +52,11 @@ export function redactConversationPii(text: string): string {
     return candidate.length >= 4
       && ((/\d/.test(candidate) && /[a-z]/i.test(candidate)) || /[!@#$%^&*_+=]/.test(candidate) || /^\d{4,}$/.test(candidate));
   };
-  const labelledSecret = looksLikeSecret(labelledValue) || looksLikeSecret(immediateValue);
-  const secretMaterial = /-----BEGIN [A-Z ]*(?:PRIVATE KEY|CERTIFICATE)|\b(?:sk|pk)[_-][a-z0-9_-]{12,}|\beyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+|\bBearer\s+\S+|\.(?:p12|pfx|pem|key)\b/i;
+  // "password 13245679": a label, a space and a secret-looking value, with no connector. The
+  // client sent exactly this and it reached the log unredacted (manager test 22 Sep).
+  const adjacentValue = /\b(?:contrasena|password|passphrase|passwd|clave|pin)\b[\s:=]+(\S{4,})/i.exec(normalized)?.[1] ?? '';
+  const labelledSecret = looksLikeSecret(labelledValue) || looksLikeSecret(immediateValue) || looksLikeSecret(adjacentValue);
+  const secretMaterial = /-----BEGIN [A-Z ]*(?:PRIVATE KEY|CERTIFICATE)|\b(?:sk|pk)[_-][a-z0-9_-]{12,}|\beyJ[a-z0-9_-]+\.[a-z0-9_-]+\.[a-z0-9_-]+|\bBearer\s+\S+|\b[\w-]{2,}\.(?:p12|pfx|pem|key)\b/i;
   const opaqueValue = /^(?:(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9!@#$%^&*+=_./:-]{8,}|\d{4,8}|[A-Za-z0-9+/=_-]{40,})$/;
   if ((!identityMethodOnly && labelledSecret) || secretMaterial.test(text) || opaqueValue.test(text.trim())) return '[CONTENIDO_SENSIBLE_OMITIDO]';
   return text
