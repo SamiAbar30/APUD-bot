@@ -140,7 +140,10 @@ export class WorkflowService {
       const {extractedText: _text,...safeReport}=report;
       return this.db.$transaction(async tx=>{
         await tx.botApodDocumento.update({where:{id:doc.id},data:{pageCount:report.pageCount,hasAiram:report.hasAiram,hasPowersArt25:report.missingPowers.length===0,identityMatches:report.identityMatches,rawAuditJson:json({...safeReport,requestId})}});
-        await this.transition(tx,c,E.audit,{...safeReport,documentId:doc.id,sha256:doc.sha256Hash},{auditStatus:report.status,pageCount:report.pageCount});
+        if(c.phaseOneClosedAt){
+          await tx.botApodExpediente.update({where:{id:c.id},data:{auditStatus:report.status,pageCount:report.pageCount,version:{increment:1}}});
+          await tx.botApodHumanTask.upsert({where:{dedupeKey:`late-audit:${doc.id}`},create:{expedienteId:c.id,dedupeKey:`late-audit:${doc.id}`,kind:'DOCUMENT_REVIEW',assignedTo:'DAYANA',reason:'Auditoría terminada tras el cierre de fase 1; revisar el documento sin reactivar mensajes.',evidence:json({documentId:doc.id,status:report.status})},update:{}});
+        }else await this.transition(tx,c,E.audit,{...safeReport,documentId:doc.id,sha256:doc.sha256Hash},{auditStatus:report.status,pageCount:report.pageCount});
       });
     });
   }
@@ -157,8 +160,15 @@ export class WorkflowService {
       const verifiedBytes=await this.storage.read(doc.s3OrLocalPath,doc.sha256Hash);verifiedBytes.fill(0);if(signal.aborted)throw new AppError('LOCK_LOST');
       return this.db.$transaction(async tx=>{
         await tx.botApodDocumento.update({where:{id:documentId},data:{approvedAt:new Date(),approvedBy:input.reviewer,clientReviewedAt:input.clientReviewed?new Date():null,documentType:report.isValid?'APODERAMIENTO_FINAL':'APODERAMIENTO_PROVISIONAL'}});
-        await tx.botApodHumanTask.updateMany({where:{expedienteId:id,dedupeKey:`DOCUMENT_REVIEW:${id}:${documentId}`,status:'OPEN'},data:{status:'RESOLVED',resolvedAt:new Date(),resolvedBy:input.reviewer,resolutionRef:input.evidenceRef}});
+        await tx.botApodHumanTask.updateMany({where:{expedienteId:id,dedupeKey:{in:[`DOCUMENT_REVIEW:${id}:${documentId}`,`late-audit:${documentId}`]},status:'OPEN'},data:{status:'RESOLVED',resolvedAt:new Date(),resolvedBy:input.reviewer,resolutionRef:input.evidenceRef}});
+        if(this.env.APUD_VERSION===1&&c.phaseOneClosedAt){
+          const evidence={documentId,sha256:input.sha256,evidenceRef:input.evidenceRef,clientEvidenceRef:input.clientEvidenceRef,documentReviewed:true,priorOutcome:c.phaseOneOutcome,priorEvidence:c.phaseOneEvidence,legalFilingVerified:false};
+          await tx.botApodExpediente.update({where:{id},data:{documentApproved:true,clientReviewed:true,version:{increment:1},...(report.isValid?{phaseOneOutcome:'PDF_RECEIVED',phaseOneEvidence:json(evidence)}:{})}});
+          await tx.botApodHumanTask.upsert({where:{dedupeKey:`phase-one-document:${documentId}`},create:{expedienteId:id,dedupeKey:`phase-one-document:${documentId}`,kind:'PHASE_ONE_DOCUMENT_REVIEW',assignedTo:'DAYANA',reason:report.isValid?'Documento revisado tras finalizar la fase 1; el bot permanece en silencio.':'Documento provisional revisado tras finalizar la fase 1; continuar su corrección manualmente.',evidence:json(evidence)},update:{}});
+          return {status:'PHASE_ONE_CLOSED',version:c.version+1};
+        }
         if(this.env.APUD_VERSION===1&&report.isValid){
+          await tx.botApodExpediente.update({where:{id},data:{documentApproved:true,clientReviewed:true}});
           await closePhaseOne(tx,c,'PDF_RECEIVED',{documentId,sha256:input.sha256,evidenceRef:input.evidenceRef,clientEvidenceRef:input.clientEvidenceRef??null,documentReviewed:true},input.reviewer);
           return {status:'PHASE_ONE_CLOSED',version:c.version+1};
         }
@@ -233,7 +243,8 @@ export class WorkflowService {
         if(eventType==='CONVERSATION_TEXT'){
           if(!c.identityVerified){await this.db.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'IDENTITY_NOT_VERIFIED'}});return;}
           const reportedText=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')).join('\n');
-          const reported=this.env.APUD_VERSION===1&&!c.optOutAt?phaseOneReportedOutcome(reportedText,{currentState:c.currentState,pendingQuestion:c.pendingQuestion}):null;
+          const previousAssistant=await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',createdAt:{lt:row.createdAt}},orderBy:[{createdAt:'desc'},{id:'desc'}],select:{content:true}});
+          const reported=this.env.APUD_VERSION===1&&!c.optOutAt?phaseOneReportedOutcome(reportedText,{currentState:c.currentState,pendingQuestion:c.pendingQuestion,lastAssistantText:previousAssistant?.content}):null;
           if(reported){
             await this.db.$transaction(async tx=>{
               await closePhaseOne(tx,c,reported,{inboxIds:turnIds,messageId:row.externalId},'WHATSAPP_CLIENT');
@@ -267,7 +278,7 @@ export class WorkflowService {
           const introduction=sentOpening??await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',OR:[{content:'Plantilla aprobada: ASK_HAS_CERT'},{AND:[{content:{contains:'LITIGIOS'}},{content:{contains:'apoderamiento apud acta'}}]}]},select:{id:true}});
           const text=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')).join('\n');
           // Durable memory beyond the recent window: the client may be answering days later.
-          const older=await this.db.botApodMessage.findMany({where:{expedienteId:id,id:{notIn:history.map(m=>m.id)},externalId:{notIn:turnRows.map(x=>x.externalId)},createdAt:{gte:c.phaseOneStartedAt??new Date(Date.now()-30*86400000),lt:sourceMessage?.createdAt??row.createdAt}},orderBy:[{createdAt:'desc'},{id:'desc'}],take:200});
+          const older=await this.db.botApodMessage.findMany({where:{expedienteId:id,id:{notIn:history.map(m=>m.id)},externalId:{notIn:turnRows.map(x=>x.externalId)},createdAt:{lt:sourceMessage?.createdAt??row.createdAt}},orderBy:[{createdAt:'desc'},{id:'desc'}],take:200});
           const memory=historicalCaseMemory(older.reverse(),text);
           const previousInboundAt=history.find(m=>m.role==='user')?.createdAt??c.lastInboundAt;
           const turn=await this.conversationAgent.turn(c,text,history.reverse().map(m=>({role:m.role==='user'?'user':'assistant',content:m.content})),Boolean(introduction),[caseMemory({...c,lastInboundAt:previousInboundAt,conversationSummary:null}),memory].filter(Boolean).join('\n'));

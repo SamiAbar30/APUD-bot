@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { WorkflowService } from './workflow-service.js';
 import type { ConfiguredAdapters } from '../adapters/configured.js';
 import { json } from './workflow-service.js';
-import { canFollowUp, FOLLOW_UP_STATES, DAY_MS, REMINDER_DAYS, followUpTemplate } from './follow-up.js';
+import { canFollowUp, FOLLOW_UP_STATES, DAY_MS, REMINDER_DAYS, followUpTemplate, nextFollowUp, recentConversation } from './follow-up.js';
 import { errorCode } from '../infrastructure/security.js';
 import { closePhaseOne, phaseOneExpired } from './phase-one.js';
 
@@ -34,7 +34,11 @@ export async function scheduleFollowUps(flow:WorkflowService,now=new Date()):Pro
       }
       // After downtime send at most the latest due reminder, never a burst of historical reminders.
       const day=[...REMINDER_DAYS].reverse().find(d=>days>=d&&d>c.lastReminderDay);if(!day)return;
-      if(await flow.db.botApodAccion.count({where:{expedienteId:c.id,status:{in:['PENDING','RUNNING','UNCERTAIN','BLOCKED','FAILED','HUMAN_REQUIRED']},payload:{path:['reminderCycle'],equals:c.reminderCycle}}}))return;
+      if(await flow.db.botApodAccion.count({where:{expedienteId:c.id,OR:[{status:{in:['PENDING','RUNNING','UNCERTAIN','BLOCKED','FAILED','HUMAN_REQUIRED']},payload:{path:['reminderCycle'],equals:c.reminderCycle}},{status:{in:['PENDING','RUNNING','UNCERTAIN']},actionType:{in:['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA']}}]}}))return;
+      if(recentConversation(c,now)){
+        // Consume this milestone without claiming a reminder was sent. The day-30 anchor is unchanged.
+        await flow.db.botApodExpediente.updateMany({where:{id:c.id,version:c.version,reminderCycle:c.reminderCycle},data:{lastReminderDay:day,nextReminderAt:nextFollowUp(c.reminderAnchorAt,day)}});return;
+      }
       const key=`followup-${c.id}-${c.reminderCycle}-${day}`;
       await flow.db.botApodAccion.upsert({where:{idempotencyKey:key},create:{expedienteId:c.id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({template:followUpTemplate(day),reminderDay:day,reminderCycle:c.reminderCycle,stepReached:c.stepReached,anchor:c.reminderAnchorAt.toISOString()}),idempotencyKey:key},update:{}});
     });

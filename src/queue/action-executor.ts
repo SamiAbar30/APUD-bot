@@ -15,7 +15,7 @@ import { courtChecklist, tutorialWithRoster } from '../core/guides.js';
 import { approvedTemplate } from '../core/approved-template.js';
 import { E } from '../core/workflow-events.js';
 import type { Queues } from './queues.js';
-import { canFollowUp, FOLLOW_UP_STATES, nextFollowUp } from '../core/follow-up.js';
+import { canFollowUp, recentConversation, FOLLOW_UP_STATES, nextFollowUp } from '../core/follow-up.js';
 import { randomUUID } from 'node:crypto';
 import { redactConversationPii } from '../core/conversation-policy.js';
 import { redactOutboundHistory } from '../core/outbound-history.js';
@@ -69,7 +69,7 @@ export class ActionExecutor {
       }
       if(isReminder&&!reconcileOnly){
         const freshInput=await this.flow.db.botApodInbox.count({where:{expedienteId:currentCase.id,status:'PENDING'}});
-        if(freshInput||actionPayload.reminderCycle!==currentCase.reminderCycle||actionPayload.stepReached!==currentCase.stepReached||actionPayload.anchor!==currentCase.reminderAnchorAt?.toISOString()||!canFollowUp(currentCase)){
+        if(freshInput||recentConversation(currentCase)||actionPayload.reminderCycle!==currentCase.reminderCycle||actionPayload.stepReached!==currentCase.stepReached||actionPayload.anchor!==currentCase.reminderAnchorAt?.toISOString()||!canFollowUp(currentCase)){
           await this.flow.db.botApodAccion.update({where:{id},data:{status:'CANCELLED',lastError:'FOLLOW_UP_CONTEXT_CHANGED'}});return;
         }
       }
@@ -99,7 +99,7 @@ export class ActionExecutor {
         if(!reconcileOnly&&(fresh.phaseOneClosedAt||this.flow.env.APUD_VERSION===1&&phaseOneExpired(fresh)))throw new AppError('PHASE_ONE_CLOSED');
         if(!reconcileOnly&&(fresh.optOutAt||(fresh.automationPaused&&!(humanHandoff&&fresh.currentState==='ESCALATED_HUMAN'))))throw new AppError('AUTOMATION_PAUSED_OR_CLIENT_OPT_OUT');
         if(isConversationReply&&!reconcileOnly&&actionPayload.contextStep!==fresh.stepReached)throw new AppError('CONVERSATION_STEP_CHANGED');
-        if(isReminder&&!reconcileOnly&&(actionPayload.reminderCycle!==fresh.reminderCycle||actionPayload.stepReached!==fresh.stepReached||actionPayload.anchor!==fresh.reminderAnchorAt?.toISOString()||!canFollowUp(fresh)||await this.flow.db.botApodInbox.count({where:{expedienteId:fresh.id,status:'PENDING'}})))throw new AppError('FOLLOW_UP_CONTEXT_CHANGED');
+        if(isReminder&&!reconcileOnly&&(recentConversation(fresh)||actionPayload.reminderCycle!==fresh.reminderCycle||actionPayload.stepReached!==fresh.stepReached||actionPayload.anchor!==fresh.reminderAnchorAt?.toISOString()||!canFollowUp(fresh)||await this.flow.db.botApodInbox.count({where:{expedienteId:fresh.id,status:'PENDING'}})))throw new AppError('FOLLOW_UP_CONTEXT_CHANGED');
         if(signal.aborted)throw new AppError('LOCK_LOST');attempted=true;
       };
       try {
@@ -143,12 +143,12 @@ export class ActionExecutor {
         // earlier uncertain attempt remains unresolved until affirmative evidence.
         const uncertain=reconcileOnly||result!==undefined||(error instanceof AdapterError?error.outcome==='uncertain':attempted);
         const exhausted=running&&action.retryCount+1>=action.maxRetries;
-        const status=exhausted&&!result?'HUMAN_REQUIRED':uncertain?'UNCERTAIN':error instanceof AppError?'BLOCKED':'FAILED';
+        const status=isReminder&&!attempted&&!reconcileOnly&&errorCode(error)==='FOLLOW_UP_CONTEXT_CHANGED'?'CANCELLED':exhausted&&!result?'HUMAN_REQUIRED':uncertain?'UNCERTAIN':error instanceof AppError?'BLOCKED':'FAILED';
         const receipt={...priorReceipt,executionContext:context,...(result?{...result.receipt,...(result.event?{nextEvent:result.event}:{}),effectResult:result}:{})};
         const updated=await this.flow.db.botApodAccion.updateMany({where:{id,...(running?{status:'RUNNING',startedAt}:{status:action.status})},data:{status,receipt:json(receipt),lastError:errorCode(error)}});
         if(updated.count===1&&['FAILED','UNCERTAIN','HUMAN_REQUIRED'].includes(status))await this.queues.deadLetter.add('effect-needs-review',{actionId:id,expedienteId:c.id,code:errorCode(error)},{jobId:`dlq-${id}`,removeOnComplete:false});
         const isFallbackNotice=action.idempotencyKey.startsWith('blocked-notice-');
-        if(updated.count===1&&status==='BLOCKED'&&!isFallbackNotice&&['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA'].includes(action.actionType)&&!c.optOutAt&&!c.phaseOneClosedAt&&!(this.flow.env.APUD_VERSION===1&&phaseOneExpired(c))){
+        if(updated.count===1&&status==='BLOCKED'&&!isFallbackNotice&&!isReminder&&['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA'].includes(action.actionType)&&!c.optOutAt&&!c.phaseOneClosedAt&&!(this.flow.env.APUD_VERSION===1&&phaseOneExpired(c))){
           await this.flow.db.botApodHumanTask.upsert({where:{dedupeKey:`blocked:${id}`},create:{expedienteId:c.id,dedupeKey:`blocked:${id}`,kind:'CONVERSATION_REVIEW',reason:`Mensaje bloqueado: ${errorCode(error)}`,evidence:json({actionId:id,code:errorCode(error)})},update:{}});
           await this.flow.db.botApodAccion.upsert({where:{idempotencyKey:`blocked-notice-${id}`},create:{expedienteId:c.id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:'Para seguir con este paso necesito que lo revise una persona del despacho. Te escribimos por aquí en cuanto lo tenga.'},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:`blocked-notice-${id}`},update:{}});
         }
