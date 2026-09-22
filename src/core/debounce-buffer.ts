@@ -2,6 +2,7 @@ import type { PrismaClient, Prisma } from '@prisma/client';
 import type { Queue } from 'bullmq';
 import { redactConversationPii } from './conversation-policy.js';
 import { CONVERSATION_QUIET_MS } from './conversation-batching.js';
+import { nextFollowUp } from './follow-up.js';
 /** Durable inbox is authoritative. Only minimized conversation text is retained. */
 export class DebounceBuffer {
   constructor(private db: PrismaClient, private queue: Queue, private quietMs=CONVERSATION_QUIET_MS) {}
@@ -18,7 +19,9 @@ export class DebounceBuffer {
       if (input.expedienteId) {
         if(input.eventType==='CONVERSATION_TEXT')await tx.botApodInbox.updateMany({where:{expedienteId:input.expedienteId,status:'PENDING',eventType:'CONVERSATION_TEXT'},data:{notBefore}});
         const timestamp=typeof input.payload.timestamp==='number'?new Date(Math.min(input.payload.timestamp*1000,now.getTime())):now;
-        await tx.botApodExpediente.updateMany({where:{id:input.expedienteId,OR:[{lastInboundAt:null},{lastInboundAt:{lt:timestamp}}]},data:{lastInboundAt:timestamp,priorConversation:true,reminderCycle:{increment:1},reminderCount:0,lastReminderDay:0,reminderAnchorAt:now,nextReminderAt:null}});
+        const c=await tx.botApodExpediente.findUniqueOrThrow({where:{id:input.expedienteId}});
+        const tracking=c.phaseOneStartedAt?{reminderAnchorAt:c.phaseOneStartedAt,nextReminderAt:c.automationPaused||c.phaseOneClosedAt?null:nextFollowUp(c.phaseOneStartedAt,c.lastReminderDay)}:{reminderCount:0,lastReminderDay:0,reminderAnchorAt:now,nextReminderAt:null};
+        await tx.botApodExpediente.updateMany({where:{id:input.expedienteId,OR:[{lastInboundAt:null},{lastInboundAt:{lt:timestamp}}]},data:{lastInboundAt:timestamp,priorConversation:true,reminderCycle:{increment:1},...tracking}});
         if(conversationText)await tx.botApodMessage.create({data:{expedienteId:input.expedienteId,externalId:input.externalId,role:'user',content:redactConversationPii(conversationText).slice(0,2000),source:input.source??'WHATSAPP',createdAt:timestamp}});
         if(input.eventType==='CLIENT_OPT_OUT')await tx.botApodExpediente.update({where:{id:input.expedienteId},data:{optOutAt:now,automationPaused:true,nextReminderAt:null}});
       }

@@ -15,7 +15,7 @@ for(const text of ['vale','ok','lo haré luego','no tengo tiempo','I will do it 
 }
 await check('text burst waits at least a minute, durable deadline equals queue deadline',async()=>{
   let saved:any;let queued:any;
-  const db:any={$queryRaw:async()=>[],botApodInbox:{findUnique:async()=>null,create:async({data}:any)=>(saved={id:'one',...data}),updateMany:async()=>({count:1})},botApodExpediente:{updateMany:async()=>({count:1})},botApodMessage:{create:async()=>({})},$transaction:async(fn:any)=>fn(db)};
+  const db:any={$queryRaw:async()=>[],botApodInbox:{findUnique:async()=>null,create:async({data}:any)=>(saved={id:'one',...data}),updateMany:async()=>({count:1})},botApodExpediente:{updateMany:async()=>({count:1}),update:async()=>({}),findUniqueOrThrow:async()=>({id:'one',phaseOneStartedAt:null,phaseOneClosedAt:null,automationPaused:false,lastReminderDay:0,reminderCycle:0})},botApodMessage:{create:async()=>({})},$transaction:async(fn:any)=>fn(db)};
   const buffer=new DebounceBuffer(db,{add:async(...args:any[])=>{queued=args;}} as any);
   const before=Date.now();await buffer.ingestMessage({externalId:'one',expedienteId:'test',telefono:'00000',eventType:'CONVERSATION_TEXT',payload:{text:'tengo NIE'}});
   assert.ok(saved.notBefore.getTime()-before>=60_000,'must not reply after only four seconds');assert.ok(queued[2].delay>=59_900);

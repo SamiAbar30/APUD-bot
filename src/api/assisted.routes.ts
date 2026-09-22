@@ -57,16 +57,19 @@ export async function assistedRoutes(api:FastifyInstance,flow:WorkflowService,ex
     });});
   });
   api.post('/cases/:id/draft-review',async request=>{
+    if(flow.env.APUD_VERSION!==2)throw new AppError('APUD_V2_REQUIRED',409);
     const {id}=params.parse(request.params);const b=z.object({version,operatorId:z.string().min(3).max(100),evidenceRef:z.string().min(5).max(200),documentId:z.string().uuid(),sha256:z.string().regex(/^[a-f0-9]{64}$/),clientReviewed:z.literal(true)}).strict().parse(request.body);
     const c=await flow.load(id);const d=await flow.db.botApodDocumento.findUniqueOrThrow({where:{id:b.documentId}});if(c.documentId!==d.id||d.expedienteId!==id||d.sha256Hash!==b.sha256||d.documentType!=='BORRADOR_SEDE')throw new AppError('DRAFT_REFERENCE_MISMATCH');
     return flow.event(id,b.version,EventType.CLIENT_DRAFT_APPROVED,{documentId:d.id,sha256:d.sha256Hash,evidenceRef:b.evidenceRef},{},b.operatorId);
   });
   api.post('/cases/:id/submission-confirmation',async request=>{
+    if(flow.env.APUD_VERSION!==2)throw new AppError('APUD_V2_REQUIRED',409);
     const {id}=params.parse(request.params);const b=z.object({version,operatorId:z.string().min(3).max(100),evidenceRef:z.string().min(5).max(200),documentId:z.string().uuid(),sha256:z.string().regex(/^[a-f0-9]{64}$/),submissionVerified:z.literal(true)}).strict().parse(request.body);
     const c=await flow.load(id);const d=await flow.db.botApodDocumento.findUniqueOrThrow({where:{id:b.documentId}});if(c.documentId!==d.id||d.expedienteId!==id||d.sha256Hash!==b.sha256||d.documentType!=='BORRADOR_SEDE'||!c.clientReviewed)throw new AppError('REVIEWED_DRAFT_REQUIRED');
     return flow.event(id,b.version,EventType.OPERATOR_SUBMISSION_CONFIRMED,{operatorId:b.operatorId,evidenceRef:b.evidenceRef,reviewedDraftId:d.id,reviewedDraftSha256:d.sha256Hash},{},b.operatorId);
   });
   api.post('/cases/:id/assisted-draft',async(request,reply)=>{
+    if(flow.env.APUD_VERSION!==2)throw new AppError('APUD_V2_REQUIRED',409);
     const {id}=params.parse(request.params);let pfx:Buffer|undefined,password:Buffer|undefined;let observedVersion:number|undefined;
     const disconnected=new AbortController();const onAborted=()=>disconnected.abort();const onClosed=()=>{if(!reply.raw.writableEnded)disconnected.abort();};request.raw.once('aborted',onAborted);reply.raw.once('close',onClosed);
     try{

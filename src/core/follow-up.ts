@@ -16,6 +16,10 @@ export function stepFor(c:Pick<BotApodExpediente,'currentState'|'dni'|'hasDigita
   }
 }
 export function canFollowUp(c:Pick<BotApodExpediente,'currentState'|'stepReached'>):boolean{return FOLLOW_UP_STATES.has(c.currentState)&&c.stepReached!=='ASISTENCIA_SEGURA';}
+/** A scheduled milestone must not interrupt a conversation that is already active. */
+export function recentConversation(c:Pick<BotApodExpediente,'lastInboundAt'|'lastOutboundAt'>,now=new Date()):boolean {
+  return [c.lastInboundAt,c.lastOutboundAt].some(at=>at!==null&&at.getTime()>now.getTime()-DAY_MS);
+}
 export function nextFollowUp(anchor:Date,lastDay:number):Date|null {
   const day=[...REMINDER_DAYS,30].find(value=>value>lastDay);
   return day?new Date(anchor.getTime()+day*DAY_MS):null;

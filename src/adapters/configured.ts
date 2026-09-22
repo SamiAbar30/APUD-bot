@@ -17,7 +17,7 @@ const EnvName=z.string().regex(/^[A-Z][A-Z0-9_]{1,100}$/);
 const SearchFilter=z.object({filterId:z.string().trim().min(1).max(80),field:z.string().trim().min(1).max(80),condition:z.string().trim().min(1).max(30)}).strict();
 const Review={reviewed:z.literal(true),reviewEvidenceRef:z.string().min(5),enabled:z.boolean().default(false)};
 const KmaleonConfig=z.object({
-  ...Review,legacySearch:z.boolean().default(false),baseUrl:z.string().url(),clientId:z.string().min(1),clientSecretEnv:EnvName,authState:z.string().min(1),redirectUri:z.string().min(1),recipientCode:z.number().int().positive().optional(),
+  ...Review,legacySearch:z.boolean().default(false),baseUrl:z.string().url(),clientId:z.string().min(1),clientSecretEnv:EnvName,authState:z.string().min(1),redirectUri:z.string().min(1),recipientCode:z.number().int().positive().optional(),samiRecipientCode:z.number().int().positive().optional(),
   mapping:z.object({
     project:z.object({id:Path,dni:Path}).strict(),
     projects:z.object({
@@ -214,10 +214,12 @@ export async function loadConfiguredAdapters(values:Record<string,string|undefin
     const recipient=values.DAYANA_USER_ID?.trim();
     let recipientCode:number|undefined;
     if(recipient){const parsed=Number(recipient);if(!Number.isSafeInteger(parsed)||parsed<1)throw new AdapterError('KMALEON_RECIPIENT_CODE_INVALID');recipientCode=parsed;}
-    const c=await config(values.KMALEON_CONFIG_FILE,KmaleonConfig,{baseUrl:secret(values,'KMALEON_BASE_URL'),clientId:secret(values,'KMALEON_CLIENT_ID'),clientSecretEnv:'KMALEON_CLIENT_SECRET',authState:secret(values,'KMALEON_AUTH_STATE'),redirectUri:secret(values,'KMALEON_REDIRECT_URI'),recipientCode,enabled:true});
+    const sami=values.SAMI_USER_ID?.trim();let samiRecipientCode:number|undefined;
+    if(sami){const parsed=Number(sami);if(!Number.isSafeInteger(parsed)||parsed<1)throw new AdapterError('KMALEON_SAMI_RECIPIENT_CODE_INVALID');samiRecipientCode=parsed;}
+    const c=await config(values.KMALEON_CONFIG_FILE,KmaleonConfig,{baseUrl:secret(values,'KMALEON_BASE_URL'),clientId:secret(values,'KMALEON_CLIENT_ID'),clientSecretEnv:'KMALEON_CLIENT_SECRET',authState:secret(values,'KMALEON_AUTH_STATE'),redirectUri:secret(values,'KMALEON_REDIRECT_URI'),recipientCode,...(samiRecipientCode!==undefined?{samiRecipientCode}:{}),enabled:true});
     const client=new KmaleonClient({baseUrl:c.baseUrl,clientId:c.clientId,clientSecret:secret(values,c.clientSecretEnv),authState:c.authState,redirectUri:c.redirectUri,writesEnabled:outbound&&c.enabled,timeoutMs:positiveSetting(values,'KMALEON_TIMEOUT_MS',120000),authTimeoutMs:positiveSetting(values,'KMALEON_AUTH_TIMEOUT_MS',120000),rejectUnauthorized:values.KMALEON_REJECT_UNAUTHORIZED!=='false'});
     if(c.legacySearch){
-      adapters.kmaleon=new KmaleonGateway(client,{recipientCode:c.recipientCode,mapping:reviewedKmaleonMapping(c.reviewEvidenceRef),searchImplementation:legacySearch(client),operations:new ReviewedKmaleonOperations(client,c.reviewEvidenceRef),annotationPageStart:1});
+      adapters.kmaleon=new KmaleonGateway(client,{recipientCode:c.recipientCode,mapping:reviewedKmaleonMapping(c.reviewEvidenceRef),searchImplementation:legacySearch(client),operations:new ReviewedKmaleonOperations(client,c.reviewEvidenceRef,{samiRecipientCode:c.samiRecipientCode}),annotationPageStart:1});
     } else {
     const m=c.mapping;if(!m)throw new AdapterError('KMALEON_MAPPING_REQUIRED');
     const normalizePhone=(value:unknown)=>typeof value==='string'?value.trim().replace(/^\+/,'').replace(/[\s().-]/g,''):'';

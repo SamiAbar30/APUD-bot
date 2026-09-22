@@ -73,6 +73,12 @@ model BotApodExpediente {
   automationPaused Boolean @default(false)
   optOutAt DateTime?
   priorConversation Boolean @default(false)
+  /// Absolute phase-one engagement window; replies never restart it.
+  phaseOneStartedAt DateTime?
+  phaseOneClosedAt DateTime?
+  /// Reported client outcome is distinct from verified legal filing.
+  phaseOneOutcome String?
+  phaseOneEvidence Json?
   /// Last question actually asked, so a returning client is never asked something else.
   pendingQuestion String?
   pendingQuestionAt DateTime?
@@ -97,6 +103,7 @@ model BotApodExpediente {
   inbox BotApodInbox[]
   @@index([kmaleonExpedienteId])
   @@index([currentState, updatedAt])
+  @@index([phaseOneClosedAt, phaseOneStartedAt])
   @@map("bot_apod_expedientes")
 }
 model BotApodAccion {
@@ -208,6 +215,7 @@ model BotApodTrigger {
   expedienteId String?
   status String @default("PENDING")
   evidenceRef String
+  provenance Json?
   lastError String?
   createdAt DateTime @default(now())
   processedAt DateTime?
