@@ -16,16 +16,28 @@ const SPOKEN:Record<string,string>={'manana por la manana':'mañana por la maña
 export function nextStepSentence(hasDigitalCert:boolean|null):string{
   if(hasDigitalCert===true)return 'Mientras tanto, cuando puedas seguimos con la firma del apoderamiento en la Sede Judicial.';
   if(hasDigitalCert===false)return 'Mientras tanto, cuando te venga bien seguimos con el certificado digital.';
-  return 'Mientras tanto, para seguir con el apoderamiento me basta con saber si tienes certificado digital a tu nombre.';
+  // An extra question here read as re-asking the triage question the client had already answered.
+  return 'Mientras tanto seguimos con el apoderamiento cuando me digas, y si lo prefieres lo tramitamos nosotros por ti.';
 }
 
 /** Replies that must stay exactly as they are: stopping, health, and security notices. */
 const CLOSED=/dejo de escribirte|llama al 112|no me envies|no debes compartirla|no puedo compartir instrucciones|que te llame|para que la llamen|siento mucho/;
 
+/** The client is stuck or lost, which protocol 1.2 / 2.2 answers with the office taking over. */
+const STUCK=/no entiendo|no lo entiendo|no se como|no se que hacer|no puedo|no me deja|no consigo|no me aclaro|me atasco|no se de que|ayudame|puedes ayudarme|no sabria/;
+/** …unless the subject is the claim itself, where the certificate is not the answer. */
+const CLAIM_SUBJECT=/asnef|reclamaci|deuda|intereses|pagar|pagado|cobro|cobrar|factura|expediente|demanda|contrato|importe/;
+
 export function completeReply(clientText:string,replyText:string,hasDigitalCert?:boolean|null):string{
   const n=normalize(clientText);
   const r=normalize(replyText);
   const additions:string[]=[];
+  // An explanation alone leaves a lost client where they were: close with the offer to do it.
+  if(STUCK.test(n)&&!CLAIM_SUBJECT.test(n)&&hasDigitalCert!==undefined
+    &&!/mandame|me lo mandas|lo hago yo|lo termino yo|te lo hacemos|archivo de tu certificado/.test(r)&&!CLOSED.test(r))
+    additions.push(hasDigitalCert===true
+      ?'Y si lo prefieres, mándame el archivo de tu certificado y, en otro mensaje, su contraseña, y lo hago yo por ti.'
+      :'Y si lo prefieres, en cuanto tengas el certificado me lo mandas por aquí con la contraseña en otro mensaje y lo hago yo por ti.');
   // Asked how long the claim or the payment takes: no invented dates, the team owns that answer.
   if(/cuanto se tarda|cuanto tardan|cuando (?:me )?(?:llega|pagan|paga|cobro|ingresan)|que plazo|en cuanto tiempo/.test(n)
     &&!/plazo|tarda|reclamaciones@/.test(r))
@@ -64,6 +76,11 @@ export function completeReply(clientText:string,replyText:string,hasDigitalCert?
     additions.push('Y sin problema: primero eso y cuando tú digas seguimos con el apoderamiento.');
   if(routes&&!defersOurStep&&hasDigitalCert!==undefined&&!CLOSED.test(r)&&!/certificado|sede judicial|juzgado|firmar|apoderamiento/.test(r)&&!additions.length)
     additions.push(nextStepSentence(hasDigitalCert));
-  if(!additions.length)return replyText;
-  return [replyText.trim(),...additions.slice(0,2)].join(' ');
+  // Someone telling you about their illness, their job or their family is not asking for a step.
+  // Answer the person first; the instruction that follows then reads as help, not as deafness.
+  const opensUp=/me recuperare|lo estoy pasando|estoy fatal|estoy sol|no puedo mas|me han despedido|sin trabajo|me voy a ver|mi madre|mi padre|mi hijo|estoy enferm|operacion|me da verguenza/.test(n);
+  const prefix=opensUp&&!/siento|entiendo|animo|cuidate|gracias por contarm/.test(r)
+    ?'Entiendo, y gracias por contármelo; no hay ninguna prisa con esto. ':'';
+  if(!additions.length&&!prefix)return replyText;
+  return prefix+[replyText.trim(),...additions.slice(0,2)].join(' ');
 }
