@@ -6,10 +6,11 @@ import { json } from '../core/workflow-service.js';
 import { AppError } from '../infrastructure/security.js';
 import { redactConversationPii } from '../core/conversation-policy.js';
 import { canFollowUp, FOLLOW_UP_STATES, nextFollowUp } from '../core/follow-up.js';
+import { phaseOneExpired } from '../core/phase-one.js';
 
 const params=z.object({id:z.string().uuid()});
 export async function automationRoutes(api:FastifyInstance,flow:WorkflowService,aiStatus:string){
-  api.get('/automation',async()=>({pollerEnabled:flow.env.KMALEON_POLLER_ENABLED,remindersEnabled:flow.env.REMINDERS_ENABLED,aiMode:flow.env.AI_MODE,aiStatus,dayanaConfigured:Boolean(flow.env.DAYANA_USER_ID),triggerMacro:27,completionMacro:10,pollIntervalMs:flow.env.KMALEON_POLL_INTERVAL_MS,reminderDays:[3,7,15],expiryDay:30,contractualCharges:'MANAGEMENT_REVIEW_REQUIRED',triggers:await flow.db.botApodTrigger.findMany({orderBy:{createdAt:'desc'},take:50})}));
+  api.get('/automation',async()=>({apudVersion:flow.env.APUD_VERSION,credentialIntakeEnabled:Boolean(flow.env.APUD_CREDENTIAL_KEY),pollerEnabled:flow.env.KMALEON_POLLER_ENABLED,remindersEnabled:flow.env.REMINDERS_ENABLED,aiMode:flow.env.AI_MODE,aiStatus,dayanaConfigured:true,notificationChannel:'PLATFORM',triggerMacros:[24,27],triggerRecipient:'ABAR, SAMI',pollIntervalMs:flow.env.KMALEON_POLL_INTERVAL_MS,reminderDays:[3,7,15],expiryDay:30,deadlineBasis:'FIRST_ACCEPTED_CONTACT',triggers:await flow.db.botApodTrigger.findMany({orderBy:{createdAt:'desc'},take:50})}));
   api.get('/human-tasks',async()=>flow.db.botApodHumanTask.findMany({where:{status:'OPEN'},orderBy:{createdAt:'asc'},take:300}));
   api.post('/human-tasks/:id/resolve',async request=>{
     const {id}=params.parse(request.params);const b=z.object({operatorId:z.string().trim().min(3).max(100),evidenceRef:z.string().trim().min(5).max(200)}).strict().parse(request.body);
@@ -27,10 +28,11 @@ export async function automationRoutes(api:FastifyInstance,flow:WorkflowService,
     return flow.locked(id,async()=>flow.db.$transaction(async tx=>{
       const c=await tx.botApodExpediente.findUniqueOrThrow({where:{id}});
       if(c.version!==b.version)throw new AppError('CASE_CHANGED_RELOAD');
+      if(c.phaseOneClosedAt||flow.env.APUD_VERSION===1&&phaseOneExpired(c))throw new AppError('PHASE_ONE_CLOSED',409);
       if(!b.paused&&(c.optOutAt||c.currentState==='ESCALATED_HUMAN'))throw new AppError('CASE_REQUIRES_EXPLICIT_RECOVERY');
       if(!b.paused&&await tx.botApodHumanTask.count({where:{expedienteId:id,kind:'NO_RESPONSE_30_DAYS',status:'OPEN'}}))throw new AppError('MANAGEMENT_REVIEW_REQUIRED');
-      const anchor=new Date();
-      const row=await tx.botApodExpediente.update({where:{id},data:{automationPaused:b.paused,version:{increment:1},reminderCycle:{increment:1},reminderAnchorAt:anchor,reminderCount:0,lastReminderDay:0,nextReminderAt:!b.paused&&canFollowUp(c)?nextFollowUp(anchor,0):null}});
+      const anchor=c.phaseOneStartedAt??new Date();
+      const row=await tx.botApodExpediente.update({where:{id},data:{automationPaused:b.paused,version:{increment:1},reminderCycle:{increment:1},reminderAnchorAt:anchor,...(!c.phaseOneStartedAt?{reminderCount:0,lastReminderDay:0}:{}),nextReminderAt:!b.paused&&canFollowUp(c)?nextFollowUp(anchor,c.phaseOneStartedAt?c.lastReminderDay:0):null}});
       await tx.botApodAuditLog.create({data:{expedienteId:id,event:b.paused?'AUTOMATION_PAUSED':'AUTOMATION_RESUMED',operator:'OPERATOR',metadata:json({reason:b.reason,stepReached:c.stepReached})}});
       return row;
     }));

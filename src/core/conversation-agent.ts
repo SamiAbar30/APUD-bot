@@ -59,8 +59,6 @@ export interface ConversationModel {
  * validated before the workflow or outbox can use it.
  */
 export class StrictConversationAgent {
-  /** Durable case memory for the current turn, set by the workflow before it calls the agent. */
-  memory?: string;
   private readonly phase: ConversationPhase;
 
   constructor(private readonly model?: ConversationModel, phase: ConversationPhase = 3) {
@@ -83,6 +81,7 @@ export class StrictConversationAgent {
     expediente: CaseContext,
     text: string,
     history: readonly ConversationHistoryMessage[] = [],
+    memory?: string,
   ): Promise<ConversationClassification> {
     const local = classifyClientText(expediente, text);
     const deviceEvidence=(choice:ConversationClassification):ConversationClassification=>{
@@ -123,7 +122,7 @@ export class StrictConversationAgent {
         allowedOptions: allowedConversationOptions(expediente),
         text,
         history: boundedConversationHistory(history),
-        ...(this.memory?{caseMemory:this.memory}:{}),
+        ...(memory?{caseMemory:memory}:{}),
       });
       return deviceEvidence(validateModelClassification(expediente, proposed));
     } catch {
@@ -140,6 +139,7 @@ export class StrictConversationAgent {
     expediente: CaseContext,
     text: string,
     history: readonly ConversationHistoryMessage[] = [],
+    memory?: string,
   ): Promise<ConversationReply> {
     const rollout = this.classifyRollout(text);
     const local = classifyClientText(expediente, text);
@@ -172,7 +172,7 @@ export class StrictConversationAgent {
           text,
           history: boundedConversationHistory(history),
           helpProgress:{digitalAttempts:expediente.digitalHelpAttempts??0,certificateAttempts:expediente.certificateHelpAttempts??0},
-          ...(this.memory?{caseMemory:this.memory}:{}),
+          ...(memory?{caseMemory:memory}:{}),
         });
         const validated = validateModelReply(proposed);
         if (validated) {
@@ -197,13 +197,13 @@ export class StrictConversationAgent {
   }
 
   /** Shared by the durable webhook worker and the real-provider evaluator. */
-  async turn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[]=[],introduced=history.some(m=>m.role==='assistant'&&/LITIGIOS/i.test(m.content)&&/apoderamiento apud acta/i.test(m.content))):Promise<{type:EventType;payload:Record<string,unknown>}>{
+  async turn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[]=[],introduced=history.some(m=>m.role==='assistant'&&/LITIGIOS/i.test(m.content)&&/apoderamiento apud acta/i.test(m.content)),memory?:string):Promise<{type:EventType;payload:Record<string,unknown>}>{
     const guidanceDocumentType=declaredDocumentType(text)??history.filter(m=>m.role==='user').map(m=>declaredDocumentType(m.content)).filter(Boolean).at(-1);
-    const result=await this.decideTurn(expediente,text,history,introduced);
+    const result=await this.decideTurn(expediente,text,history,introduced,memory);
     return guidanceDocumentType?{...result,payload:{...result.payload,guidanceDocumentType}}:result;
   }
 
-  private async decideTurn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[],introduced:boolean):Promise<{type:EventType;payload:Record<string,unknown>}>{
+  private async decideTurn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[],introduced:boolean,memory?:string):Promise<{type:EventType;payload:Record<string,unknown>}>{
     const n=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
     let reply:ConversationReply|undefined;
     const yielded=this.phase===3&&!requiresDeterministicHandoff(text)?conversationYield(text)??undefined:undefined;
@@ -225,33 +225,30 @@ export class StrictConversationAgent {
     if(/\b(?:stop|parar|cancelar|baja)\b|no me escrib|dejad de escribir|dejen de escribir|no quiero seguir|no me interesa|borra(?:d|r) mis datos/.test(n))reply={text:'Entendido, dejo de escribirte sobre este trámite. Si más adelante quieres retomarlo, escríbenos por aquí y seguimos.',requiresHumanReview:true,handoffReason:'HUMANO'};
     if(/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)&&!requiresDeterministicHandoff(text))reply={text:'No me envíes códigos SMS, PIN ni claves bancarias. El PIN de tu DNI electrónico lo usas solo tú en tu equipo, nunca por aquí.',requiresHumanReview:false};
     if(!reply&&(requiresDeterministicHandoff(text)||text==='[CONTENIDO_SENSIBLE_OMITIDO]')){
-      // Only a message that actually carries the secret counts as the handover. Merely saying the
-      // word ("dime cuál es mi contraseña") must not close the case, or the bot goes silent on a
-      // client who never sent anything.
+      // Sensitive chat content is never proof that a usable certificate/password pair arrived.
+      // Only the secure receipt workflow can complete that outcome; a disclosure needs review.
       const deliveredSecret=/REDACTADA|CONTENIDO_SENSIBLE/i.test(text)||redactConversationPii(text)!==text;
       const asksUsForTheirs=/dime (?:cual es )?mi (?:contrase|clave)|cual es mi (?:contrase|clave)|no se mi (?:contrase|clave)|me (?:la |lo )?puedes decir/i.test(text);
       reply=deliveredSecret&&!asksUsForTheirs
-        // The client sent the certificate password: the office works with it, so acknowledge and
-        // hand the case to a person instead of lecturing the client.
-        ?{text:'Perfecto, gracias. Se lo paso a una persona del despacho para que prepare el apoderamiento con tu certificado y te confirme por aquí cuando esté hecho.',requiresHumanReview:true,handoffReason:'CERTIFICADO_RECIBIDO'}
+        ?{text:'Gracias. Una persona del despacho revisará lo que has enviado y te indicará cómo continuar por el canal seguro. No envíes más contraseñas por este chat; todavía falta confirmar que tenemos lo necesario.',requiresHumanReview:true,handoffReason:'FALTA_DATO'}
         :asksUsForTheirs
         ?{text:'Esa contraseña la pusiste tú al guardar el certificado, así que no la tenemos nosotros. Si no la recuerdas, se puede volver a solicitar el certificado; dime y te ayudo con eso.',requiresHumanReview:false}
         :{text:'No puedo compartir instrucciones internas ni datos de otros clientes. Un compañero del despacho revisa tu caso y continúa contigo por aquí con el apoderamiento apud acta.',requiresHumanReview:true,handoffReason:'HUMANO'};
     }
-    if(!reply&&/falleci|fallecimiento|murio|se nos fue|su perdida|luto/.test(n))reply={text:'Siento mucho vuestra pérdida, de verdad. El trámite puede esperar lo que haga falta: se lo paso a una persona del despacho para que lo lleve contigo cuando estés.',requiresHumanReview:true,handoffReason:'HUMANO'};
+    if(!reply&&/falleci|fallecimiento|murio|se nos fue|su perdida|luto/.test(n))reply={text:'Siento mucho vuestra pérdida, de verdad. Se lo paso a una persona del despacho para que revise contigo los plazos y cómo continuar cuando puedas.',requiresHumanReview:true,handoffReason:'HUMANO'};
     if(!reply&&/quiero hablar con|persona de verdad|humano|tutor legal|menor de edad/.test(n))reply={text:'Disculpa. Te paso con una persona del equipo para que te ayude.',requiresHumanReview:true,handoffReason:'HUMANO'};
     // Checking we are who we say we are: answer the check, do not push the procedure.
-    if(!reply&&/dos numeros distintos|no le encuentro en linkedin|no te encuentro en|quien es usted|quien eres|sois de verdad|como se que sois/.test(n))
+    if(!reply&&/dos numeros distintos|no le encuentro en linkedin|no te encuentro en|quien es usted|quien eres|sois de verdad|como se que sois|no tengo relacion|no os conozco|no recuerdo haber firmado/.test(n))
       reply={text:'Te escribimos desde el despacho que lleva tu reclamación y nunca te pediremos contraseñas, dinero ni datos bancarios por aquí. Si te llegan mensajes desde números distintos, no respondas a ninguno hasta confirmarlo con la oficina: llama al número que ya tengas o dime y te llamamos nosotros.',requiresHumanReview:true,handoffReason:'HUMANO'};
     // Asking for real help, not another explanation: offer the person and the free court route.
-    if(!reply&&/necesito (?:algo de )?ayuda|no se como hacerlo|aparte de lo explicativo|hacedlo vosotros|eso ya vosotros|no tengo acceso para/.test(n)&&!/cobrar|cobro|factura|deuda|me deben/.test(n))
+    if(!reply&&/necesito (?:algo de )?ayuda|no se como hacerlo|no puedo hacerlo|aparte de lo explicativo|hacedlo vosotros|eso ya vosotros|no tengo acceso para/.test(n)&&!/cobrar|cobro|factura|deuda|me deben/.test(n))
       reply={text:'Te paso con una persona del despacho para que lo haga contigo paso a paso. Y si prefieres no pelearte con el ordenador, puedes firmarlo gratis en el juzgado pidiendo cita en el decanato.',requiresHumanReview:true,handoffReason:'HUMANO'};
     if(!reply&&/sigo pagando|puedo (?:seguir )?pagando|lo que (?:yo )?debo a|debo a \w+|dejo de pagar|sigo con los plazos|plazos acordados/.test(n))
       reply={text:'Sobre si te conviene seguir pagando esos plazos, no te lo puedo decir yo: te lo confirma el equipo que lleva tu reclamación y se lo paso ahora con lo que me cuentas.',requiresHumanReview:true,handoffReason:'PAGO'};
     if(!reply&&/a que cuenta|\biban\b(?!\s+a\b)|numero de cuenta|cuenta bancaria|transferencia/.test(n))reply={text:'Nunca damos datos bancarios por WhatsApp, así que desconfía de quien te los pida por aquí. Paso tu consulta a una persona del equipo y te escribe por este mismo chat; mientras tanto no hagas ningún pago.',requiresHumanReview:true,handoffReason:'PAGO'};
     // "¿Para qué sirve?" deserves the purpose, not another instruction.
     if(!reply&&/para que (?:te |me |le |nos |eso )?(?:sirve|vale|es)|que es (?:el |un |eso del )?(?:apoderamiento|apud)|por que (?:necesito|hace falta|tengo que)/.test(n))
-      reply={text:'El apoderamiento apud acta es el permiso para que nuestros procuradores te representen ante el juzgado en tu reclamación. Es gratuito si lo haces tú en la Sede Judicial y sin él la reclamación no puede avanzar.',requiresHumanReview:false};
+      reply={text:'El apoderamiento apud acta permite que los procuradores designados te representen ante el juzgado. Puedes hacerlo por tu cuenta en la Sede Judicial o en el juzgado, de forma gratuita; el equipo te confirma cómo afecta al siguiente paso de tu reclamación.',requiresHumanReview:false};
     // "No entiendo qué tengo que hacer": give the whole path in two steps, not one more question.
     if(!reply&&/no entiendo (?:entonces )?que tengo que hacer|que tengo que hacer (?:entonces|ahora)|no se que tengo que hacer|estoy perdid/.test(n))
       reply={text:expediente.hasDigitalCert===true
@@ -259,10 +256,10 @@ export class StrictConversationAgent {
         :'Son dos pasos: primero consigues el certificado digital de la FNMT, con tu DNI electrónico o por vídeo identificación, y después firmas el apoderamiento en la Sede Judicial. Si lo prefieres, puedes firmarlo gratis en el juzgado pidiendo cita en el decanato.',requiresHumanReview:false};
     // Availability is an answer, not noise: acknowledge it without promising a time.
     if(!reply&&/estoy trabajando|trabajo de \d|de \d{1,2} a \d{1,2}|manana por la manana|por la tarde|a partir de las|cuando salga de trabajar|el fin de semana/.test(n))
-      reply={text:`Perfecto, lo hacemos cuando te venga bien, no hay prisa. ${expediente.hasDigitalCert===true?'Cuando estés delante del ordenador entramos en la Sede Judicial y firmamos el apoderamiento.':'Cuando tengas un rato tranquilo seguimos con el certificado digital.'}`,requiresHumanReview:false};
+      reply={text:`De acuerdo, retomamos cuando puedas. ${expediente.hasDigitalCert===true?'Cuando estés delante del ordenador te guío para entrar en la Sede Judicial.':'Seguimos desde el paso pendiente del certificado digital.'} Si tienes algún plazo comunicado por el despacho, tenlo en cuenta.`,requiresHumanReview:false};
     // Health and vulnerability come before the workflow: never answer this with the next task.
     if(!reply&&/ansiedad|depresi|enferm|hospital|ingresad|baja medica|operacion|me encuentro mal|no estoy bien de salud/.test(n))
-      reply={text:'Siento mucho que estés pasando por esto y lo primero es que te cuides; si te encuentras mal, llama al 112 o acude a tu médico. El trámite no tiene ninguna prisa: se lo paso a una persona del despacho para que lo lleve contigo con calma.',requiresHumanReview:true,handoffReason:'HUMANO'};
+      reply={text:'Siento que estés pasando por esto. Se lo paso a una persona del despacho para que revise contigo cómo continuar y los plazos que pueda haber.',requiresHumanReview:true,handoffReason:'HUMANO'};
     // The client wants to pay: the price is an approved fact, so answer it before anything else.
     if(!reply&&/quiero pagar|prefiero pagar|pagarlo|lo pago|como (?:lo )?pago|intentare pagar|voy a pagar|puedo pagar|quiero que lo gestion/.test(n)&&!/no puedo pagar|no puedo seguir pagando|no lo puedo pagar|sin intereses|decirles|a ellos|les voy a pagar|la deuda|el prestamo|la cuota|el acuerdo/.test(n))
       reply={text:'El apoderamiento es gratuito si lo firmas tú. Si prefieres que lo gestione la empresa colaboradora, son 35 € y te paso con una persona del despacho para darte de alta.',requiresHumanReview:true,handoffReason:'PAGO'};
@@ -278,7 +275,7 @@ export class StrictConversationAgent {
       reply={text:'Apunto el teléfono y se lo paso al despacho para que la llamen. Les digo que se identifiquen como Litigios al llamar, así sabrá que la llamada es nuestra y no de un desconocido.',requiresHumanReview:true,handoffReason:'HUMANO'};
     // They tell us when it will be done: take note, do not repeat the instructions now.
     if(!reply&&/no puedo responder|no puedo atender|luego te contesto|ahora no puedo|manana (?:mismo|lo|la|te|os|se)|lo tiene manana|en cuanto (?:pueda|salga|llegue|termine)|por el trabajo|estoy en el trabajo|si no iria ahora/.test(n))
-      reply={text:'Perfecto, sin prisa. Lo dejo apuntado y cuando lo tengas seguimos por aquí desde donde lo dejamos.',requiresHumanReview:false};
+      reply={text:'De acuerdo, seguimos por aquí desde donde lo dejamos cuando puedas continuar.',requiresHumanReview:false};
     // They received a letter from the lender and plan to ignore it: confirm who answers what.
     if(!reply&&/procedo a ignorar|los ignoro|les ignoro|no les contesto|no les hago caso/.test(n))
       reply={text:'A ellos no tienes que contestarles tú: reenvía ese correo a reclamaciones@litigios.es y el equipo se encarga. Lo que sí depende de ti es el apoderamiento, y en eso te guío yo.',requiresHumanReview:false};
@@ -293,9 +290,9 @@ export class StrictConversationAgent {
         // They want us to do it: that is the office's own route, and it needs their certificate
         // file and its password.
         ?{text:expediente.hasDigitalCert===true
-          ?'Claro, te lo hacemos nosotros. Envíame por aquí el archivo de tu certificado y su contraseña, y lo preparo yo.'
-          :'Claro, te lo hacemos nosotros en cuanto tengas el certificado: cuando lo tengas, me envías el archivo y su contraseña por aquí. Si no quieres sacarlo, lo gestiona la empresa colaboradora por 35 €.',requiresHumanReview:true,handoffReason:'CERTIFICADO_RECIBIDO'}
-        :{text:'Sin moverte de casa tienes dos salidas: la vídeo identificación de la FNMT para sacar el certificado, o que lo gestione la empresa colaboradora por 35 €. ¿Cuál prefieres?',requiresHumanReview:false};
+          ?'Claro, podemos organizar la asistencia del despacho. El certificado y su contraseña se facilitan únicamente por el canal seguro que te indique el equipo. ¿Tienes localizada la copia del certificado?'
+          :'Podemos organizar la asistencia del despacho cuando tengas el certificado. Primero te ayudo a conseguirlo; después el equipo te indicará el canal seguro para aportarlo.',requiresHumanReview:false}
+        :{text:'Podemos revisar la vídeo identificación de la FNMT para obtener el certificado o la gestión opcional con la empresa colaboradora. Cada servicio tiene su coste, que hay que confirmar antes de contratar. ¿Cuál prefieres consultar?',requiresHumanReview:false};
     if(!reply&&sentUsSomething(text)&&!/ya se realizo|ya se ha presentado|esta presentada|se presento|\?/.test(n))reply={text:RECEIVED_IT,requiresHumanReview:true,handoffReason:'FALTA_DATO'};
     if(!reply&&wroteAndWaits(text))reply={text:WAITING_FOR_REPLY,requiresHumanReview:true,handoffReason:'HUMANO'};
     // Lost the password of their own certificate: it cannot be recovered, so say so and move on.
@@ -305,17 +302,17 @@ export class StrictConversationAgent {
       reply={text:'El certificado digital es personal y gratuito, no depende de tu trabajo ni de la Seguridad Social ni de Cl@ve. Se saca de dos formas: con el DNI electrónico y su PIN, o por vídeo identificación de la FNMT desde casa.',requiresHumanReview:false};
     if(!reply&&/como (?:te )?(?:lo |la )?firmo|como se firma|como lo hago|como se hace eso/.test(n))
       reply={text:expediente.hasDigitalCert===true
-        ?'Desde el ordenador donde tengas el certificado, entras en la Sede Judicial, eliges el apoderamiento apud acta y firmas con el certificado. Si lo prefieres, mándame el archivo del certificado con su contraseña y lo hago yo por ti.'
+        ?'Desde el ordenador donde tengas el certificado, entras en la Sede Judicial y sigues la guía para otorgar el apoderamiento apud acta. Si prefieres asistencia del despacho, el equipo te indicará cómo aportar el certificado por el canal seguro.'
         :'Primero hace falta el certificado digital, y con él firmas el apoderamiento en la Sede Judicial. Si prefieres no usar ordenador, lo firmas gratis en el juzgado pidiendo cita en el decanato.',requiresHumanReview:false};
     const claimSide=/cobrar|cobro|pagar|pagado|factura|deuda|intereses|reclamaci|fallo vuestro|expediente|demanda|impagad|se cumple el|explicar los correos|los correos|el correo/.test(n);
     if(!reply&&/no entiendo|no me aclaro/.test(n)&&!claimSide&&!/no se de que|que certificado|que es (?:un |el )?certificado/.test(n)&&expediente.hasDigitalCert===true&&!/copia|contrase/.test(n))
-      reply={text:'Te lo simplifico: con tu certificado entras en la Sede Judicial desde el ordenador y firmas el apoderamiento; no hay que rellenar nada más. Si te atascas en algún punto, dime cuál y lo vemos.',requiresHumanReview:false};
+      reply={text:'Vamos paso a paso: entra en la Sede Judicial desde el ordenador donde tienes el certificado y sigue la guía para completar los datos y revisar las facultades del apoderamiento. ¿En qué pantalla te has quedado?',requiresHumanReview:false};
     if(!reply&&/una hoja|en un papel|a mano|en blanco|lo firmo y ya/.test(n))
       reply={text:'En papel no vale: el apoderamiento apud acta se firma electrónicamente en la Sede Judicial con tu certificado, o en persona ante el juzgado con tu DNI. Dime cuál de las dos te viene mejor.',requiresHumanReview:false};
     if(!reply&&/en spam|en la carpeta de spam|no me llego|no me ha llegado|reenviame|me lo reenvia|volver a mandarme/.test(n))
       reply={text:'Sin problema, te lo volvemos a mandar. Desde aquí no puedo confirmarte si ese correo es nuestro: reenvíalo a reclamaciones@litigios.es y te lo confirman ellos.',requiresHumanReview:true,handoffReason:'FALTA_DATO'};
     if(!reply&&/cuanto (?:suele )?tarda|que suele tardar|cuanto se tarda|cuanto tiempo lleva/.test(n))
-      reply={text:'Firmar el apoderamiento se hace en el momento, en cuanto tengas el certificado; lo que tarde el certificado depende de la FNMT. Los plazos de la reclamación te los confirma el equipo en reclamaciones@litigios.es.',requiresHumanReview:false};
+      reply={text:'La duración depende de que el certificado funcione y de los pasos que te falten; no puedo confirmarte un tiempo exacto. Los plazos de tu reclamación te los confirma el equipo del despacho.',requiresHumanReview:false};
     // Negotiating with the lender is never the client's job alone.
     if(!reply&&/puedo llamar a \w+|no podeis escribir vosotros|hablar con ellos|les digo que|negociar con ellos/.test(n))
       reply={text:'No negocies tú con ellos ni te comprometas a pagar nada por tu cuenta: eso lo lleva el equipo de reclamaciones. Cuéntaselo a reclamaciones@litigios.es y te dicen cómo responderles.',requiresHumanReview:true,handoffReason:'HUMANO'};
@@ -323,12 +320,12 @@ export class StrictConversationAgent {
     if(otherTopic)reply=outsideTopicReply(otherTopic,text);
     // They are willing but do not know how to get the file out: show the export, then the send.
     if(!reply&&/no se como (?:mandarte|enviarte|exportar|sacar|pasarte)|como te lo (?:mando|envio|paso)|como lo exporto|como saco (?:el|la|una) (?:certificado|copia)|donde esta el archivo|no se cual es el archivo/.test(n))
-      reply={text:'Te explico cómo sacarlo: abre la aplicación donde instalaste el certificado, busca «exportar» o «copia de seguridad», te pedirá ponerle una contraseña al archivo y se guardará como .p12 o .pfx. Mándame ese archivo por aquí junto con la contraseña que le hayas puesto y yo hago el apoderamiento.',requiresHumanReview:false};
+      reply={text:'Abre la aplicación donde instalaste el certificado y busca «exportar» o «copia de seguridad». Si permite exportar la clave privada, protege la copia con una contraseña; suele guardarse como .p12 o .pfx. Conserva ambos y usa únicamente el canal seguro que te indique el despacho.',requiresHumanReview:false};
     const describesBlocker=/solo (?:me )?(?:aparece|sale)|no (?:me )?(?:deja|aparece|sale|funciona|carga|abre)|no tengo el codigo|no encuentro (?:la opcion|el boton|donde)|se (?:cierra|bloquea|queda)|me da error|sale (?:un )?error|no me lo permite/.test(n);
-    if(!reply&&describesBlocker&&!/otras? (?:dos )?(?:compan|empresa)|compania|prestamo|entrar en \w+$/.test(n)&&((expediente.digitalHelpAttempts??0)>=1||(expediente.certificateHelpAttempts??0)>=1))
+    if(!reply&&describesBlocker&&!/otras? (?:dos )?(?:compan|empresa)|compania|prestamo|entrar en \w+$/.test(n))
       // Stuck doing it themselves: the office can finish it with their certificate.
       reply={text:expediente.hasDigitalCert===true
-        ?'Entiendo, ahí se ha atascado. No te pelees más: mándame por aquí el archivo de tu certificado y su contraseña y lo termino yo por ti.'
+        ?'Entiendo, te has quedado en ese paso. Una persona del despacho puede revisar la dificultad y organizar la asistencia contigo por el canal seguro.'
         :'Entiendo, ahí se ha atascado. Se lo paso a una persona del despacho para que te guíe en ese punto concreto. Si prefieres no seguir peleándote con esto, puedes firmarlo gratis en el juzgado pidiendo cita en el decanato.',requiresHumanReview:true,handoffReason:'FALTA_DATO'};
     // The message is about the claim, a charge or a letter: answer that, do not pivot to the
     // certificate. Measured on real messages, this was the largest single failure.
@@ -340,11 +337,11 @@ export class StrictConversationAgent {
     // Money and timing belong to the claims team; the bot must not invent dates.
     if(!reply&&asksAboutMoney)reply={text:'Escribe a reclamaciones@litigios.es para consultar el estado de tu reclamación. Siento la espera; no tengo una fecha de cobro confirmada.',requiresHumanReview:false};
     // Asking whether we need the password: yes, it is what lets the office do the apoderamiento.
-    if(!reply&&/(?:la |lo )?necesitas(?: tu)?\b|hace falta (?:mi |la |tu )?(?:contrase\S*|clave)|necesitas (?:mi |la )?(?:contrase\S*|clave)|quieres (?:mi |la )?(?:contrase\S*|clave)/.test(n)&&/contrase|clave|password/.test(n))reply={text:'Sí, necesito el archivo de tu certificado y su contraseña para poder hacer el apoderamiento por ti. Envíamelos por aquí y me encargo yo.',requiresHumanReview:false};
+    if(!reply&&/(?:la |lo )?necesitas(?: tu)?\b|hace falta (?:mi |la |tu )?(?:contrase\S*|clave)|necesitas (?:mi |la )?(?:contrase\S*|clave)|quieres (?:mi |la )?(?:contrase\S*|clave)/.test(n)&&/contrase|clave|password/.test(n))reply={text:'Para la asistencia puede ser necesaria la copia del certificado con su contraseña. El despacho te indicará cómo aportarlas por el canal seguro y qué autorización corresponde; no las envíes por este chat.',requiresHumanReview:false};
     // Identity questions deserve verifiable detail, not the pending workflow question.
     if(!reply&&/quien(?:es)? sois|qui[eé]n eres|de qu[eé] despacho|qu[eé] despacho|sois de verdad|como se que sois|quien me escribe|para quien trabajas/.test(n))reply={text:'Soy Dayana, la asistente virtual de LITIGIOS, el despacho de abogados que lleva tu reclamación. Puedes confirmar este mensaje con la oficina en reclamaciones@litigios.es antes de seguir.',requiresHumanReview:false};
-    // The client offers to send the certificate: take it, and ask for the password with it.
-    if(!reply&&/(?:te|os) lo (?:env[ií]o|mando|paso)|quieres que (?:te )?lo (?:env[ií]e|mande)|dices que te lo (?:env[ií]e|mande)|es (?:un )?documento personal|es personal/.test(n)&&expediente.hasDigitalCert===true)reply={text:'Sí, envíamelo por aquí junto con su contraseña y me encargo yo del apoderamiento. Lo usamos solo para este trámite.',requiresHumanReview:false};
+    // An offer to send a certificate does not establish receipt or authorize its use.
+    if(!reply&&/(?:te|os) lo (?:env[ií]o|mando|paso)|quieres que (?:te )?lo (?:env[ií]e|mande)|dices que te lo (?:env[ií]e|mande)|es (?:un )?documento personal|es personal/.test(n)&&expediente.hasDigitalCert===true)reply={text:'Es un documento personal. Para organizar la asistencia, espera a que el equipo te indique el canal seguro y la autorización necesaria; no envíes aquí el certificado ni su contraseña.',requiresHumanReview:false};
     // The client says the certificate app is not installed: stop telling them to open it.
     if(!reply&&/no tengo (?:la |esa )?(?:aplicacion|app)|sin (?:la )?(?:aplicacion|app)|no (?:me )?aparece (?:la )?(?:aplicacion|app)|no uso (?:esa )?(?:aplicacion|app)/.test(n)&&expediente.hasDigitalCert===true)reply={text:'Entendido, sin esa aplicación no podemos sacar la copia desde el móvil. Puedes hacer el apoderamiento gratis en el juzgado o lo tramita por ti la empresa colaboradora; ¿cuál prefieres?',requiresHumanReview:false};
     // "La primera" only means something next to the options we actually listed.
@@ -384,10 +381,10 @@ export class StrictConversationAgent {
     if(!reply&&this.phase===3){const guidance=guidanceRequest(expediente,text);if(guidance)return guidance;}
     if(!reply&&this.phase===3)reply=reviewedConversationReply(expediente,text)??undefined;
     if(!reply){
-      const choice=await this.classify(expediente,text,history);
+      const choice=await this.classify(expediente,text,history,memory);
       if(choice.kind==='OPTION'){
         return {type:choice.eventType,payload:{conversationOption:choice.optionId,conversationConfidence:choice.confidence}};
-      }else reply=await this.respond(expediente,text,history);
+      }else reply=await this.respond(expediente,text,history,memory);
     }
     const flatten=(value:string)=>value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().replace(/[^a-z0-9? ]/g,' ').replace(/\s+/g,' ').trim();
     const lastOfficeMessage=[...history].reverse().find(m=>m.role==='assistant')?.content;
@@ -395,8 +392,8 @@ export class StrictConversationAgent {
     if(reply)reply={...reply,text:completeReply(text,reply.text,expediente.hasDigitalCert)};
     const candidate=reply?flatten(reply.text):'';
     const repeated=Boolean(previous&&candidate&&(previous===candidate||previous.includes(candidate)||candidate.includes(previous)));
-    if(reply&&repeated){
-      reply={text:'Perdona la insistencia. Si no puedes seguir desde el móvil, podemos hacerlo de otra forma: presencialmente en el juzgado, que es gratis, o lo tramita por ti la empresa colaboradora. ¿Cuál prefieres?',requiresHumanReview:false};
+    if(reply&&repeated&&!reply.requiresHumanReview){
+      reply={text:'Perdona, ya habíamos visto ese paso. Dime qué parte sigue sin quedar clara y te ayudo desde ahí.',requiresHumanReview:false};
     }
     return {type:EventType.CLIENT_SMALL_TALK,payload:{responseId:'CONVERSATION_REPLY',rolloutPhase:this.phase,rolloutKind:'WORKFLOW_REQUEST',responseText:reply!.text,requiresHumanReview:reply!.requiresHumanReview,...(reply!.requiresHumanReview?{handoffReason:reply!.handoffReason??'HUMANO',handoffMarker:`[[HANDOFF:${reply!.handoffReason??'HUMANO'}]]`}:{})}};
   }

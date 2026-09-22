@@ -1,6 +1,6 @@
 import {KmaleonClient} from './kmaleon-client.js';
 import {AdapterError,sha256,requireId} from '../common/http.js';
-import {KmaleonExpedienteCandidateSchema,type KmaleonAnnotation,type KmaleonExpedienteCandidate,type KmaleonMacro,type KmaleonPendingApudActaPage,type KmaleonResponseMapping} from '../../contracts/kmaleon.contract.js';
+import {KmaleonExpedienteCandidateSchema,type KmaleonAnnotation,type KmaleonExpedienteCandidate,type KmaleonMacro,type KmaleonPendingApudActaPage,type KmaleonResponseMapping,type KmaleonTriggerReference} from '../../contracts/kmaleon.contract.js';
 import {isValidSpanishIdentityDocument,normalizeIdentityDocument} from '../../domain/identity/spanish-identity-document.js';
 
 type Row=Record<string,unknown>;
@@ -30,17 +30,39 @@ export function reviewedKmaleonMapping(reviewEvidenceRef:string):KmaleonResponse
 }
 /** Uses only vendor-documented reads plus the existing, live-verified macro catalogue. */
 export class ReviewedKmaleonOperations {
-  constructor(private readonly client:KmaleonClient,private readonly reviewEvidenceRef:string){}
+  constructor(private readonly client:KmaleonClient,private readonly reviewEvidenceRef:string,private readonly options:{samiRecipientCode?:number}={}){}
+  /** Read every page before returning anything; changed totals and repeats are incomplete scans. */
+  private async allRows(method:string,payload:Record<string,unknown>,pageStart:0|1,rowId:(row:Row)=>string):Promise<Row[]>{
+    const rows:Row[]=[];const seen=new Set<string>();let expectedTotal:number|undefined;let pageSize:number|undefined;
+    for(let offset=0;offset<1000;offset++){
+      const result=list(await this.client.invokeRead(method,{...payload,pageNum:pageStart+offset}));
+      if(expectedTotal!==undefined&&expectedTotal!==result.total)throw new AdapterError('KMALEON_PAGINATION_CHANGED');expectedTotal=result.total;
+      if(pageSize===undefined)pageSize=result.rows.length;
+      for(const row of result.rows){const key=rowId(row);if(seen.has(key))throw new AdapterError('KMALEON_PAGINATION_AMBIGUOUS');seen.add(key);rows.push(row);}
+      if(rows.length===expectedTotal)return rows;
+      if(rows.length>expectedTotal||result.rows.length===0||result.rows.length!==pageSize)throw new AdapterError('KMALEON_PAGINATION_INCOMPLETE');
+    }
+    throw new AdapterError('KMALEON_PAGINATION_LIMIT');
+  }
+  /** Discover the exact staff card on every intake; never infer Sami from a client or another user. */
+  async verifySami():Promise<{recipientCode:number;evidenceRef:string}>{
+    const rows=await this.allRows('cards/getCards',{filter:filter('nombre','nombre','ABAR','ls')},0,row=>id(row.interno));
+    const matches=rows.filter(row=>canonicalKmaleonText(text(row.nombrecompleto)).toUpperCase()==='ABAR, SAMI'&&array(row.categories).map(object).some(category=>text(category.codigo)==='1'));
+    if(matches.length!==1)throw new AdapterError('KMALEON_SAMI_RECIPIENT_AMBIGUOUS');
+    const card=matches[0]!;const recipientCode=Number(id(card.interno));
+    if(text(card.desactivada)!=='0')throw new AdapterError('KMALEON_SAMI_RECIPIENT_INACTIVE');
+    if(this.options.samiRecipientCode!==undefined&&this.options.samiRecipientCode!==recipientCode)throw new AdapterError('KMALEON_SAMI_RECIPIENT_IDENTITY_MISMATCH');
+    return {recipientCode,evidenceRef:'kmaleon-recipient:sha256:'+sha256(JSON.stringify({recipientCode,name:card.nombrecompleto,inactive:card.desactivada,categories:card.categories,review:this.reviewEvidenceRef}))};
+  }
   async verifyDayana(recipientCode:number):Promise<void>{
     const {rows,total}=list(await this.client.invokeRead('cards/getCards',{pageNum:0,filter:filter('cardid','cardid',String(recipientCode))}));
     if(total!==1||rows.length!==1)throw new AdapterError('KMALEON_DAYANA_RECIPIENT_AMBIGUOUS');const card=rows[0]!;
     if(id(card.interno)!==String(recipientCode)||text(card.desactivada)!=='0'||text(card.nombrecompleto).toUpperCase()!=='MORERA DE LA NUEZ, DAYANA'||!array(card.categories).map(object).some(row=>text(row.codigo)==='1'))throw new AdapterError('KMALEON_DAYANA_RECIPIENT_IDENTITY_MISMATCH');
   }
-  async macro(code:10|27):Promise<KmaleonMacro>{
-    const raw=await this.client.invokeRead('macros/getMacros',{pageNum:1,filter:''});const {rows,total}=list(raw);
-    if(total!==rows.length)throw new AdapterError('KMALEON_MACRO_CATALOGUE_INCOMPLETE');
+  async macro(code:10|24|27):Promise<KmaleonMacro>{
+    const rows=await this.allRows('macros/getMacros',{filter:''},1,row=>id(row.macro_id));
     const matches=rows.filter(row=>text(row.codigo)===String(code));if(matches.length!==1)throw new AdapterError('KMALEON_MACRO_CATALOGUE_AMBIGUOUS');const row=matches[0]!;
-    const description=text(row.descripcion);const expected=code===10?'DOCUMENTO 1 APUD ACTA':'-- A LA ESPERA DE APUD ACTA AVISADME CUANDO ESTE PORFA';
+    const description=text(row.descripcion);const expected=code===10?'DOCUMENTO 1 APUD ACTA':code===24?'-- PARA PEDIR APUD Y PAGO DE LOS 50€ AVISAME CUANDO ESTÉ PORFA':'-- A LA ESPERA DE APUD ACTA AVISADME CUANDO ESTE PORFA';
     if(canonicalKmaleonText(description)!==expected||(code===10&&(text(row.clase_id)!=='453'||text(row.clase)!=='APUD')))throw new AdapterError('KMALEON_MACRO_CATALOGUE_CHANGED');
     if(rows.some(other=>other!==row&&canonicalKmaleonText(text(other.descripcion))===canonicalKmaleonText(description)))throw new AdapterError('KMALEON_MACRO_CATALOGUE_AMBIGUOUS');
     return {code,id:id(row.macro_id),description,classCode:text(row.clase_id),classDescription:text(row.clase),evidenceRef:'kmaleon-macro:sha256:'+sha256(JSON.stringify({row,review:this.reviewEvidenceRef}))};
@@ -75,31 +97,46 @@ export class ReviewedKmaleonOperations {
     const candidate=KmaleonExpedienteCandidateSchema.safeParse({projectId,numeroExpediente:text(project.codigo),empresa:companies[0],dni,nombre:text(card.nombrecompleto),telefono:[...phones][0]});if(!candidate.success)throw new AdapterError('KMALEON_PROJECT_CONTACT_FIELDS_INVALID');return candidate.data;
   }
   private async allAnnotations(payload:Record<string,unknown>):Promise<KmaleonAnnotation[]>{
-    const rows:KmaleonAnnotation[]=[];const seen=new Set<string>();let expectedTotal:number|undefined;
-    for(let page=1;page<=100;page++){
-      const result=list(await this.client.invokeRead('calendar/annotations/getAnnotations',{...payload,pageNum:page}));
-      if(expectedTotal!==undefined&&expectedTotal!==result.total)throw new AdapterError('KMALEON_PAGINATION_CHANGED');expectedTotal=result.total;
-      for(const raw of result.rows){const row=annotation(raw);if(seen.has(row.id))throw new AdapterError('KMALEON_PAGINATION_AMBIGUOUS');seen.add(row.id);rows.push(row);}
-      if(rows.length===expectedTotal)return rows;if(rows.length>expectedTotal||result.rows.length!==80)throw new AdapterError('KMALEON_PAGINATION_INCOMPLETE');
-    }throw new AdapterError('KMALEON_PAGINATION_LIMIT');
+    return (await this.allRows('calendar/annotations/getAnnotations',payload,1,row=>id(row.codigo))).map(annotation);
   }
   async projectAnnotations(projectId:string):Promise<KmaleonAnnotation[]>{
     requireId(projectId,'PROJECT_ID');const rows=await this.allAnnotations({project_id:Number(projectId)||projectId,filter:''});
     if(rows.some(row=>row.projectId!==projectId))throw new AdapterError('KMALEON_ANNOTATION_IDENTITY_MISMATCH');return rows;
   }
-  async resolveTriggerExpediente(projectId:string):Promise<KmaleonExpedienteCandidate>{
-    const macro=await this.macro(27);const rows=await this.projectAnnotations(projectId);
-    if(!rows.some(row=>row.pending&&row.typeCode==='R'&&canonicalKmaleonText(row.text)===canonicalKmaleonText(macro.description)&&!row.comment?.trim()))throw new AdapterError('KMALEON_TRIGGER_NO_LONGER_PENDING');
-    return this.candidate(projectId);
+  private matchesTrigger(row:KmaleonAnnotation,macro:KmaleonMacro,recipientCode:number):boolean{
+    return row.recipientCode===recipientCode&&row.pending&&row.typeCode==='R'&&canonicalKmaleonText(row.text)===canonicalKmaleonText(macro.description)&&!row.comment?.trim();
+  }
+  async resolveTriggerExpediente(projectId:string,trigger:KmaleonTriggerReference):Promise<KmaleonExpedienteCandidate>{
+    if(!trigger||![24,27].includes(trigger.macroCode)||!Number.isSafeInteger(trigger.recipientCode)||trigger.recipientCode<1)throw new AdapterError('KMALEON_TRIGGER_PROVENANCE_REQUIRED');
+    requireId(trigger.externalId,'ANNOTATION_ID');
+    const sami=await this.verifySami();if(sami.recipientCode!==trigger.recipientCode)throw new AdapterError('KMALEON_TRIGGER_RECIPIENT_CHANGED');
+    const macro=await this.macro(trigger.macroCode);const candidate=await this.candidate(projectId);
+    // Recheck the exact triggering aviso after identity/contact reads. Another aviso cannot replace it.
+    const rows=await this.projectAnnotations(projectId);
+    if(!rows.some(row=>row.id===trigger.externalId&&this.matchesTrigger(row,macro,sami.recipientCode)))throw new AdapterError('KMALEON_TRIGGER_NO_LONGER_PENDING');
+    return candidate;
   }
   async listPendingApudActa(input:{page?:number}={}):Promise<KmaleonPendingApudActaPage>{
     const page=input.page??1;if(page!==1)throw new AdapterError('KMALEON_TRIGGER_PAGE_INVALID');
-    const macro=await this.macro(27);const rows=await this.allAnnotations({filter:filter('PorTexto','@texto','-- A LA ESPERA DE APUD ACTA','like')});
-    // Expose one complete result set only. A bounded failure never looks like a smaller successful batch.
-    const pending=rows.filter(row=>row.pending&&row.typeCode==='R'&&canonicalKmaleonText(row.text)===canonicalKmaleonText(macro.description)&&!row.comment?.trim());
-    if(pending.length>250)throw new AdapterError('KMALEON_TRIGGER_CASE_LIMIT');
+    // The active staff identity gate runs before any notice search.
+    const sami=await this.verifySami();
     const items:KmaleonPendingApudActaPage['items']=[];
-    for(const row of pending){const project=await this.project(row.projectId);if(!this.isOpen(project))continue;items.push({externalId:row.id,projectId:row.projectId,macroCode:27,pending:true,open:true,evidenceRef:'kmaleon-trigger:sha256:'+sha256(JSON.stringify({annotation:row,archive:project.archivo,macro:macro.evidenceRef}))});}
+    const seen=new Set<string>();const projects=new Map<string,Row>();
+    for(const code of [24,27] as const){
+      const macro=await this.macro(code);
+      // Vendor supports one annotation filter: fetch only this macro's first-line text,
+      // then require the exact whole catalogue text and Sami recipient locally.
+      const firstLine=macro.description.split(/\r?\n/)[0]!;
+      const rows=await this.allAnnotations({filter:filter('PorTexto','@texto',firstLine,'like')});
+      for(const row of rows){
+        if(!this.matchesTrigger(row,macro,sami.recipientCode))continue;
+        if(seen.has(row.id))throw new AdapterError('KMALEON_TRIGGER_MACRO_AMBIGUOUS');seen.add(row.id);
+        let project=projects.get(row.projectId);if(!project){project=await this.project(row.projectId);projects.set(row.projectId,project);}
+        if(!this.isOpen(project))continue;
+        items.push({externalId:row.id,projectId:row.projectId,source:'KMALEON_AVISO',macroCode:code,recipientCode:sami.recipientCode,pending:true,open:true,macroEvidenceRef:macro.evidenceRef,recipientEvidenceRef:sami.evidenceRef,evidenceRef:'kmaleon-trigger:sha256:'+sha256(JSON.stringify({annotation:row,archive:project.archivo,macro:macro.evidenceRef,recipient:sami.evidenceRef}))});
+      }
+    }
+    // Expose one complete result set only, with no arbitrary client-count cutoff.
     return {items,page,hasMore:false};
   }
 }

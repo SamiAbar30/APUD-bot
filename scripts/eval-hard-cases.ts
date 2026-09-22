@@ -123,10 +123,9 @@ const results:HardResult[]=[];
 for(const [index,turn] of sample.entries()){
   const context=contexts[index%contexts.length]!;
   const c={...template,currentState:context.state,hasDigitalCert:context.hasDigitalCert,certDevice:context.certDevice,certificateHelpAttempts:context.certificateHelpAttempts,digitalHelpAttempts:1,version:0,automationPaused:false,optOutAt:null,priorConversation:true};
-  agent.memory=caseMemory(c);
   let reply='';let failure='';let nextState=String(context.state);
   try{
-    const event=await agent.turn(c,turn.text,[],true);
+    const event=await agent.turn(c,turn.text,[],true,caseMemory(c));
     const decision=evaluateNextStep(c as never,event as never);
     nextState=String(decision.nextStep);
     const payload=decision.actionPayload as {template?:string;variables?:Record<string,unknown>};

@@ -1,4 +1,4 @@
-import { KmaleonIdentitySchema,KmaleonAnnotationSchema,KmaleonProjectAddressSchema,KmaleonExpedienteCandidateSchema,type KmaleonVerifiedAddress,type KmaleonResponseMapping,type KmaleonAnnotation,type KmaleonExpedienteCandidate,type DocumentProof,type NoticeProof,type KmaleonMacro,type KmaleonPendingApudActaPage } from '../../contracts/kmaleon.contract.js';
+import { KmaleonIdentitySchema,KmaleonAnnotationSchema,KmaleonProjectAddressSchema,KmaleonExpedienteCandidateSchema,type KmaleonVerifiedAddress,type KmaleonResponseMapping,type KmaleonAnnotation,type KmaleonExpedienteCandidate,type DocumentProof,type NoticeProof,type KmaleonMacro,type KmaleonPendingApudActaPage,type KmaleonTriggerReference } from '../../contracts/kmaleon.contract.js';
 import { AdapterError,requireId,requireValue,sha256 } from '../common/http.js';
 import { KmaleonClient } from './kmaleon-client.js';
 import {canonicalKmaleonText,type ReviewedKmaleonOperations} from './kmaleon-reviewed.js';
@@ -32,9 +32,9 @@ export class KmaleonGateway {
     if(!this.options.operations)throw new AdapterError('KMALEON_TRIGGER_MAPPING_NOT_REVIEWED');
     return this.options.operations.listPendingApudActa(input);
   }
-  async resolveTriggerExpediente(projectId:string):Promise<KmaleonExpedienteCandidate>{
+  async resolveTriggerExpediente(projectId:string,trigger:KmaleonTriggerReference):Promise<KmaleonExpedienteCandidate>{
     if(!this.options.operations)throw new AdapterError('KMALEON_TRIGGER_MAPPING_NOT_REVIEWED');
-    return this.options.operations.resolveTriggerExpediente(projectId);
+    return this.options.operations.resolveTriggerExpediente(projectId,trigger);
   }
   /** Read-only search used to select an existing Kmaleon expediente before local linking. */
   async searchExpedientes(input:{field:'dni'|'nombre';query:string;page?:number}):Promise<{items:KmaleonExpedienteCandidate[];page:number;hasMore:boolean}> {

@@ -16,7 +16,7 @@ const SPOKEN:Record<string,string>={'manana por la manana':'mañana por la maña
 export function nextStepSentence(hasDigitalCert:boolean|null):string{
   if(hasDigitalCert===true)return 'Mientras tanto, cuando puedas seguimos con la firma del apoderamiento en la Sede Judicial.';
   if(hasDigitalCert===false)return 'Mientras tanto, cuando te venga bien seguimos con el certificado digital.';
-  return 'Mientras tanto, para seguir con el apoderamiento me basta con saber si tienes certificado digital a tu nombre.';
+  return 'Mientras tanto, seguimos con el apoderamiento desde donde lo dejamos cuando puedas.';
 }
 
 /** Replies that must stay exactly as they are: stopping, health, and security notices. */
@@ -53,7 +53,7 @@ export function completeReply(clientText:string,replyText:string,hasDigitalCert?
   if(/hay novedades|alguna novedad|como va (?:mi|el) (?:caso|expediente|reclamacion)/.test(n)&&!/reclamaciones@/.test(r))
     additions.push(`Las novedades de tu expediente te las confirma el equipo en ${OFFICE_EMAIL}.`);
   if(/que coste|cuanto (?:cuesta|vale|costaria)|coste tiene/.test(n)&&!/gratuit|35/.test(r))
-    additions.push('Y el apoderamiento es gratuito si lo firmas tú; solo cuesta 35 € si lo gestiona la empresa colaboradora.');
+    additions.push('El apoderamiento es gratuito por tu cuenta; la gestión con la empresa colaboradora es opcional y tiene un coste que se confirma antes de contratar.');
   if(/puedo llamar a \w+|hablar con ellos|escribir vosotros/.test(n)&&!/negoci|con ellos/.test(r))
     additions.push('Y con ellos no negocies tú: cuéntaselo al equipo y te dicen cómo responderles.');
   // A reply that hands the subject to someone else still has to leave our own step visible,
@@ -64,6 +64,9 @@ export function completeReply(clientText:string,replyText:string,hasDigitalCert?
     additions.push('Y sin problema: primero eso y cuando tú digas seguimos con el apoderamiento.');
   if(routes&&!defersOurStep&&hasDigitalCert!==undefined&&!CLOSED.test(r)&&!/certificado|sede judicial|juzgado|firmar|apoderamiento/.test(r)&&!additions.length)
     additions.push(nextStepSentence(hasDigitalCert));
-  if(!additions.length)return replyText;
-  return [replyText.trim(),...additions.slice(0,2)].join(' ');
+  const opensUp=/me recuperare|lo estoy pasando|estoy fatal|estoy sol|me han despedido|sin trabajo|estoy enferm|operacion|me da verguenza/.test(n);
+  const prefix=opensUp&&!CLOSED.test(r)&&!/siento|entiendo|animo|cuidate|gracias por contarm/.test(r)
+    ?'Entiendo, y gracias por contármelo. ':'';
+  if(!additions.length&&!prefix)return replyText;
+  return prefix+[replyText.trim(),...additions.slice(0,2)].join(' ');
 }
