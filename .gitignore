@@ -17,3 +17,6 @@ evidence/*
 # Operator-reviewed local mappings may later hold business-specific details.
 /config/*.json
 !/config/*.example.json
+
+# Scratch probes used while debugging live runs.
+.probe.ts
