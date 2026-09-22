@@ -3,6 +3,7 @@ import {readFile} from 'node:fs/promises';
 import {Prisma,type BotApodRegistration,type BotApodExpediente} from '@prisma/client';
 import {RegistrationIntentSchema,SigningApprovalSchema,ReceiptEvidenceSchema,registrationIntentHash,type RegistrationIntent} from '../contracts/apud-v2.contract.js';
 import {AppError} from '../infrastructure/security.js';
+import {CredentialVault} from '../infrastructure/credential-vault.js';
 import {json,type WorkflowService} from './workflow-service.js';
 import {runAssistedDraft} from './assisted-session.js';
 import {auditRegistrationPdf} from './apud-v2-pdf.js';
@@ -13,8 +14,7 @@ import type {SedeDraftRecipe} from '../adapters/sede-judicial/sede-playwright.js
 const terminal=new Set(['CANCELLED','REGISTERED_OBSERVED']);
 type LockSignal={aborted:boolean};
 export function requireApudV2(flow:WorkflowService):void {
-  const version=(flow.env as typeof flow.env & {APUD_VERSION?:number}).APUD_VERSION??Number(process.env.APUD_VERSION??1);
-  if(version!==2)throw new AppError('APUD_V2_DISABLED',404);
+  if(flow.env.APUD_VERSION!==2)throw new AppError('APUD_V2_DISABLED',404);
   if(flow.env.DATA_MODE!=='real')throw new AppError('APUD_V2_REQUIRES_REAL_DATA',409);
 }
 function assertLock(signal:LockSignal):void {if(signal.aborted)throw new AppError('V2_CASE_LOCK_LOST',409);}
@@ -89,6 +89,16 @@ export class ApudV2RegistrationService {
         await this.task(tx,row,'V2_PREPARATION','Preparar y revisar el apoderamiento. La firma y presentación siguen pendientes.',{});return row;
       });
     });
+  }
+  /** Use the verified phase-one pair without exposing it to the browser or collecting it again. */
+  async prepareStored(caseId:string,id:string,version:number,abortSignal?:AbortSignal){
+    requireApudV2(this.flow);
+    const c=await this.flow.load(caseId);
+    const proof=c.phaseOneEvidence as Record<string,unknown>|null;
+    if(!c.phaseOneClosedAt||c.phaseOneOutcome!=='CERTIFICATE_READY'||!proof||proof.passwordValidated!==true||proof.identityValidated!==true||typeof proof.ref!=='string'||typeof proof.certificateSha256!=='string')throw new AppError('V2_VERIFIED_STORED_CERTIFICATE_REQUIRED',409);
+    const pair=await new CredentialVault(this.flow.storage.root,this.flow.env.APUD_CREDENTIAL_KEY).read(caseId,proof.ref,proof.certificateSha256);
+    try{return await this.prepare(caseId,id,version,pair.certificate,pair.password,abortSignal);}
+    finally{pair.certificate.fill(0);pair.password.fill(0);}
   }
   async prepare(caseId:string,id:string,version:number,pfx:Buffer,password:Buffer,abortSignal?:AbortSignal){
     try{return await this.locked(caseId,id,version,async(row,intent,c,signal)=>{

@@ -46,6 +46,14 @@ export async function apudV2Routes(api:FastifyInstance,flow:WorkflowService){
       return reply.code(201).send(await service.prepare(id,registrationId,observedVersion,certificate,password,disconnected.signal));
     }finally{certificate?.fill(0);password?.fill(0);request.raw.removeListener('aborted',abort);reply.raw.removeListener('close',close);}
   });
+  api.post('/cases/:id/registrations/:registrationId/prepare-stored',async(request,reply)=>{
+    requireApudV2(flow);const {id,registrationId}=params.parse(request.params);
+    const input=z.object({version}).strict().parse(request.body);
+    const disconnected=new AbortController();const abort=()=>disconnected.abort();const close=()=>{if(!reply.raw.writableEnded)abort();};
+    request.raw.once('aborted',abort);reply.raw.once('close',close);
+    try{return reply.code(201).send(await service.prepareStored(id,registrationId,input.version,disconnected.signal));}
+    finally{request.raw.removeListener('aborted',abort);reply.raw.removeListener('close',close);}
+  });
   api.post('/cases/:id/registrations/:registrationId/approve',async request=>{
     requireApudV2(flow);const {id,registrationId}=params.parse(request.params);
     const input=z.object({version,approval:SigningApprovalSchema}).strict().parse(request.body);

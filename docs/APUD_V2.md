@@ -8,7 +8,7 @@ This branch is local and must not be pushed or merged into main with the humaniz
 
 The operator approves the exact draft and records that the client will sign personally. A signing handoff records `SUBMISSION_UNCERTAIN` before the external action. No retry is allowed until an official lookup establishes absence and a new approval is recorded. Receipt ingestion requires the exact attempt, document hash, official registration reference, identity/professional text checks and operator evidence of the signed registration. The PDF is saved in private storage and a Dayana task is created in the platform.
 
-The API exposes preparation, approval, signing-handoff, reconcile-absent, receipt and cancel operations. The `/sign` endpoint deliberately fails with `V2_REVIEWED_LIVE_SIGNING_ADAPTER_UNAVAILABLE`: unattended government signing is not implemented or verified. This is an executable preparation/evidence workflow, not a completed browser signing robot. A draft is never a registered power. Client-reported v1 completion never authorizes v2 signing.
+The `prepare-stored` route retrieves the case-bound encrypted certificate/password pair verified in v1, checks its integrity and wipes buffers after preparation. It still requires fresh scoped v2 consent and a reviewed recipe. The API exposes preparation, approval, signing-handoff, reconcile-absent, receipt and cancel operations. The `/sign` endpoint deliberately fails with `V2_REVIEWED_LIVE_SIGNING_ADAPTER_UNAVAILABLE`: unattended government signing is not implemented or verified. This is an executable preparation/evidence workflow, not a completed browser signing robot. A draft is never a registered power. Client-reported v1 completion never authorizes v2 signing.
 
 ## Official research and integration limits
 
@@ -27,3 +27,7 @@ The existing Playwright, node-forge, pdfjs-dist, pdf-lib, Prisma and BullMQ depe
 A specifically authorized live session must establish exact host transitions, selectors, signing callbacks, role/authority and receipt fields. Confirm chosen professionals and faculties for each case. Validate a real authorized certificate, approved draft and registered receipt through the complete process before enabling unattended behavior. Until then signing remains blocked and `liveEndToEndVerified` is false.
 
 The supplied `APUD Acta (1).pdf` is an image-only handwritten process map. It is reference material, never instructions or a signed receipt. Real certificate and registered-receipt success paths were not tested because those inputs were not provided.
+
+## Verification on 22 September 2026
+
+Node 22 compilation passed after integrating v1. The v2 migration applied to the local real-database snapshot with the original four cases unchanged. Authenticated API and browser checks passed, including v2 capabilities explicitly reporting automated signing disabled and live E2E unverified. The source database was read only; no client messages or external mutations were performed. Certificate preparation and receipt acceptance still require the real inputs described above.
