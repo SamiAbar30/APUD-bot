@@ -3,6 +3,7 @@ export type PhaseOneReportedOutcome = 'PAYMENT_REPORTED' | 'COURT_REPORTED' | 'S
 export interface PhaseOneIntentContext {
   currentState?: string;
   pendingQuestion?: string | null;
+  lastAssistantText?: string | null;
 }
 
 const normalize = (text: string): string => text.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
@@ -35,24 +36,28 @@ function explicitlyCompletedPower(text: string): boolean {
  */
 export function phaseOneReportedOutcome(text: string, context: PhaseOneIntentContext = {}): PhaseOneReportedOutcome | null {
   if (!text.trim() || text.length > 4000 || /[?¿"“”«»]/.test(text)) return null;
-  const n = normalize(text);
+  // Preserve affirmative sí before accent folding; unaccented conditional si still blocks.
+  const n = normalize(text.replace(/\bsí(?=\s|[,.;!:]|$)/giu, 'afirmativo'));
   if (/\b(?:no|nunca|todavia|aun|not|never|havent|hasnt|didnt|dont|cannot|cant|if|cuando|si|ojala)\b/.test(n)) return null;
   if (/\b(?:voy a|vamos a|quiero|queremos|prefiero|necesito|tengo que|falta|pendiente|intent|hare|pagare|firmare|manana|proximamente|will|going to|want to|need to|plan to|tomorrow)\b/.test(n)) return null;
   if (/\b(?:me (?:dijeron|dicen|han dicho)|dice que|dijiste|me pregunta|he leido|mi (?:madre|padre|hijo|hija|pareja|amigo|amiga)|mi cliente|el cliente|su cliente)\b/.test(n)) return null;
   if (/\b(?:creo|supongo|se supone|imagino|tal vez|quizas|puede que|i think|i guess|maybe|perhaps)\b/.test(n)) return null;
   const state = context.currentState ?? '';
   const explicitPower = POWER.test(n);
+  const previous=normalize(context.lastAssistantText??context.pendingQuestion??'');
+  const shortText=n.replace(/^afirmativo[,!. ]+/,'');
 
   if (PAID.test(n)) {
     // A paid loan, invoice or FNMT certificate is a separate matter even during the payment step.
     if (/\b(?:prestamo|deuda|credito|cuota|banco|financiera|factura|honorarios|perito|peritaje|reclamacion|fnmt|certificado|loan|debt|lender|invoice)\b/.test(n)) return null;
     if (explicitPower || /\b(?:apudata|empresa colaboradora|proveedor del apoderamiento)\b/.test(n)
-      || PAYMENT_STEPS.has(state) && /^(?:ya (?:lo )?(?:he pagado|pague)|he pagado|i (?:have |already )?paid|ive paid)[.! ]*$/.test(n)) return 'PAYMENT_REPORTED';
+      || (PAYMENT_STEPS.has(state)||/\b(?:apudata|empresa colaboradora|proveedor del apoderamiento)\b/.test(previous)) && /^(?:ya (?:lo )?(?:he pagado|pague)|he pagado|i (?:have |already )?paid|ive paid)[.! ]*$/.test(shortText)) return 'PAYMENT_REPORTED';
     return null;
   }
 
   const completed = explicitlyCompletedPower(n);
-  const shortCompleted = POWER_STEPS.has(state) && SHORT_COMPLETION.test(n);
+  const askedCompletion=(POWER.test(previous)||COURT.test(previous))&&/\b(?:firm\w*|hecho|termin\w*|complet\w*|otorg\w*|justificante|pdf)\b/.test(previous)&&!/certific|copia|codigo|cita|solicitud|export/.test(previous);
+  const shortCompleted = POWER_STEPS.has(state) && askedCompletion && SHORT_COMPLETION.test(shortText);
   if (!completed && !shortCompleted) return null;
   // Merely obtaining a certificate, appointment or access code is not completing the power.
   if (/\b(?:certificado|certificate|cita|appointment|codigo|code|solicitud|application)\b/.test(n) && !explicitPower) return null;

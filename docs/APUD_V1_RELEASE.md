@@ -6,7 +6,7 @@ The release follows the user's confirmed process: Sami Abar's macro 24/27 avisos
 
 - Kmaleon intake verifies the unique active `ABAR, SAMI` user, full live macro descriptions, complete pagination, exact notice ID, recipient and open project. Durable provenance distinguishes macro 24 from 27. The €50 mentioned in macro 24 is not a payment instruction.
 - Conversation memory is passed separately into each AI turn. No shared mutable client memory remains. Saved facts, the last question and bounded source-attributed historical quotations from the same case provide continuity; source messages remain in PostgreSQL.
-- `phaseOneStartedAt` records first accepted contact. Replies, pauses and changes of step cannot restart the 30-day period. The outbox checks the deadline again before sending.
+- `phaseOneStartedAt` records first accepted contact. Replies, pauses and changes of step cannot restart the 30-day period. A due reminder milestone is skipped during conversation activity in the previous 24 hours, without extending day 30. The outbox checks the deadline again before sending.
 - Separate phase 1 completion fields record certificate readiness, a client's payment/court/self-completion report, a reviewed PDF, or expiry. They do not reuse the legal filing `COMPLETED` state. Dayana receives one deduplicated platform task. Subsequent inbound messages are retained for staff without an automated reply; ordinary resume cannot reopen phase 1.
 - Conservative local detection requires explicit completed actions. Intentions, questions, uncertainty and loan/FNMT payments do not count. Ambiguous reports can be recorded by staff with evidence in the case panel.
 - Certificate intake in the authenticated platform validates the real PKCS12/password pair and client identity, encrypts both using a separate AES-256-GCM vault key and records only references/fingerprints in the case. A password or file mention in chat cannot close the case. Ordinary inbox storage no longer retains raw secret chat text.
@@ -24,7 +24,7 @@ A real configured-provider request using an anonymized historical client turn pr
 
 No model fine-tuning was performed. These changes improve runtime policy, wording and context; they do not establish that the bot can handle every possible conversation.
 
-Compatible humanization edits from the concurrent Claude checkout were integrated without modifying that checkout. The changes acknowledge long waits, respond to personal difficulties and offer help at the first reported blocker. A separate Claude Code read-only review was requested.
+Compatible humanization edits from the concurrent Claude checkout were integrated without modifying that checkout. The changes acknowledge long waits, respond to personal difficulties and offer help at the first reported blocker. A separate Claude Code read-only review completed. Its findings led to fixes for active-conversation reminders, ambiguous short completion reports, post-deadline document review and imported history. A second code review caught affirmative “Sí” being confused with conditional “si”; that was corrected. The real 43,763-turn archive was rescanned without synthetic inputs, but contains no observed changed explicit terminal classifications for that accent fix, so it is not an accuracy benchmark.
 
 ## Activation
 
