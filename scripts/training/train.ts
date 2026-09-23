@@ -96,7 +96,7 @@ Criterios de la revisión (1 a 5 cada uno):
 - exactitud: todo lo que dice cumple el manual (enlaces, precios, pasos, seguridad); no inventa nada.
 - traspaso: pasa a una persona cuando hace falta (el cliente lo pide, no le entiende, se atasca repetidamente, casos delicados) y no cuando no hace falta.
 - humano: suena a una persona del despacho por WhatsApp: breve, natural, cálida, sin fórmulas repetidas.
-Tras un traspaso a una persona, que la asistente deje de contestar es lo correcto: la conversación sigue con una persona. Juzga si el traspaso fue oportuno, no el silencio posterior.
+Tras un traspaso, el sistema envía como mucho un acuse breve ('Gracias, lo tengo apuntado…') y luego calla: es lo previsto. Tras un traspaso a una persona, que la asistente deje de contestar es lo correcto: la conversación sigue con una persona. Juzga si el traspaso fue oportuno, no el silencio posterior.
 Aprobado = una responsable exigente daría esta conversación por buena sin correcciones importantes.
 Devuelve SOLO JSON: {"aprobado":true|false,"puntuaciones":{"comprension":n,"sigue_el_punto":n,"no_repite":n,"respeta_decisiones":n,"exactitud":n,"traspaso":n,"humano":n},"resultado":"una frase: cómo acaba el cliente","problemas":[{"turno":número de línea,"problema":"qué está mal","deberia":"qué debería haber dicho o hecho"}]}`,
     `Documento de identidad que consta en el sistema del despacho: ${document}.\nSituación del cliente (el despacho no la conocía): ${p.facts}\nObjetivo del cliente: ${p.goal}\nEstado final del expediente en el sistema: ${finalState}\n\nConversación:\n${show(transcript)}`);
