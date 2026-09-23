@@ -18,6 +18,8 @@ assert.equal(checkReply('En el móvil busca la app «Certificado Digital» de la
 assert.equal(checkReply('Entra en https://sedejudicial.justicia.es/-/apoderamiento-apud-acta por «Certificado Digital».', [], 'x'), null);
 assert.match(checkReply('Entra en https://sede-falsa.example.com/apud y sigue los pasos.', [], 'x') ?? '', /enlace/);
 assert.equal(checkReply('La empresa colaboradora lo hace por ti por 35 €.', [], 'x'), null);
+// Round 1 bug: a comma decimal was read as 62 € and valid replies were thrown away.
+assert.equal(checkReply('Con la app de la FNMT cuesta 3,62 €.', [], 'x'), null);
 assert.match(checkReply('La empresa colaboradora lo hace por ti por 50 €.', [], 'x') ?? '', /importes/);
 // Never ask for codes or bank data; saying not to send them is fine.
 assert.match(checkReply('Mándame el código SMS que te ha llegado y lo reviso.', [], 'x') ?? '', /SMS/);

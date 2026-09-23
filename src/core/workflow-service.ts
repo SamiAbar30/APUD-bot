@@ -59,6 +59,9 @@ export class WorkflowService {
     }
     const snapshot={...c,...patch,documentSha256:document?.sha256Hash??null,documentType:document?.documentType??null,kmaleonDocumentId:document?.kmaleonDocumentId??null} as unknown as Expediente;
     const decision=evaluateNextStep(snapshot,{type:type as EventType,payload} as WorkflowEvent);
+    const lead=typeof payload.brainLead==='string'?payload.brainLead.trim():'';
+    const leadTarget=decision.actionPayload as {template?:unknown;variables?:Record<string,unknown>};
+    if(lead&&typeof leadTarget.template==='string'&&leadTarget.template!=='CONVERSATION_REPLY')leadTarget.variables={...(leadTarget.variables??{}),leadText:lead.slice(0,600)};
     const enginePatch=decision.actionPayload.expedientePatch;
     const persisted:Record<string,unknown>={};
     const allowed=new Set(['hasDigitalCert','certDevice','digitalHelpAttempts','certificateHelpAttempts','consentGranted','consentVersion','consentGrantedAt','auditStatus','pageCount','isProvisionalFiled','apudataOrderId','apudataPreApproved','apudataApprovalExpiresAt','apudataApprovalEvidence','documentId','documentApproved','clientReviewed','partidoJudicial']);
@@ -264,7 +267,7 @@ export class WorkflowService {
               // Silence reads as abandonment: acknowledge once per hold while a person takes over.
               if(!c.optOutAt&&c.currentState===ApodState.ESCALATED_HUMAN){
                 const key=`held-ack-${id}-${c.version}`;
-                await tx.botApodAccion.upsert({where:{idempotencyKey:key},create:{expedienteId:id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:'He recibido tu mensaje y queda pendiente de revisión por el equipo. Continuarán contigo desde el punto en que lo dejamos.'},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:key},update:{}});
+                await tx.botApodAccion.upsert({where:{idempotencyKey:key},create:{expedienteId:id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:'Gracias, lo tengo apuntado. Una compañera del equipo lo está viendo y te escribe por aquí para seguir desde donde lo dejamos.'},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:key},update:{}});
               }
             });
             return;

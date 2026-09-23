@@ -79,13 +79,13 @@ Devuelve SOLO JSON: {"mensaje":"tu próximo mensaje (vacío si fin)","fin":true|
   return {text:String(out.mensaje??'').trim(),done:out.fin===true||!String(out.mensaje??'').trim(),why:String(out.motivo??'')};
 }
 
-async function judge(p:Persona,transcript:Line[],finalState:string){
+async function judge(p:Persona,transcript:Line[],finalState:string,document:string){
   return chatJson(JUDGE_MODEL,`Eres la responsable de apoderamientos del despacho LITIGIOS y revisas conversaciones de WhatsApp de la asistente virtual con clientes, igual que revisarías a una compañera nueva. Eres exigente: marcas cada respuesta que un cliente real encontraría inútil, repetitiva, robótica o incorrecta.
 Lo que el despacho espera (manual de la asistente):
 ---
 ${playbook}
 
-Datos reales del despacho (correctos, la asistente puede darlos):
+Datos reales del despacho (correctos, la asistente puede darlos). En la Sede el cliente pone el procurador Airam Díaz Ruiz (530, Las Palmas) y el abogado Fernando Gómez (134543, Madrid), que son los de la guía PDF; darlos es correcto:
 ${roster}
 ---
 Criterios de la revisión (1 a 5 cada uno):
@@ -96,9 +96,10 @@ Criterios de la revisión (1 a 5 cada uno):
 - exactitud: todo lo que dice cumple el manual (enlaces, precios, pasos, seguridad); no inventa nada.
 - traspaso: pasa a una persona cuando hace falta (el cliente lo pide, no le entiende, se atasca repetidamente, casos delicados) y no cuando no hace falta.
 - humano: suena a una persona del despacho por WhatsApp: breve, natural, cálida, sin fórmulas repetidas.
+Tras un traspaso a una persona, que la asistente deje de contestar es lo correcto: la conversación sigue con una persona. Juzga si el traspaso fue oportuno, no el silencio posterior.
 Aprobado = una responsable exigente daría esta conversación por buena sin correcciones importantes.
 Devuelve SOLO JSON: {"aprobado":true|false,"puntuaciones":{"comprension":n,"sigue_el_punto":n,"no_repite":n,"respeta_decisiones":n,"exactitud":n,"traspaso":n,"humano":n},"resultado":"una frase: cómo acaba el cliente","problemas":[{"turno":número de línea,"problema":"qué está mal","deberia":"qué debería haber dicho o hecho"}]}`,
-    `Situación del cliente (el despacho no la conocía): ${p.facts}\nObjetivo del cliente: ${p.goal}\nEstado final del expediente en el sistema: ${finalState}\n\nConversación:\n${show(transcript)}`);
+    `Documento de identidad que consta en el sistema del despacho: ${document}.\nSituación del cliente (el despacho no la conocía): ${p.facts}\nObjetivo del cliente: ${p.goal}\nEstado final del expediente en el sistema: ${finalState}\n\nConversación:\n${show(transcript)}`);
 }
 
 function mechanicalProblems(transcript:Line[]):string[]{
@@ -123,10 +124,18 @@ type Result={id:string;line:string;document:string;transcript:Line[];end:string;
 const results:Result[]=[];
 const queue=[...personas];
 const free=[...lines];
+const retried=new Set<string>();
 
 async function run(p:Persona,line:typeof lines[number]):Promise<Result>{
-  await clearQueueFor([line.caseId]);
-  const {caseId,started}=await resetLine(db,line.phone);
+  // The previous conversation on this line may still hold the case lock for a last reply.
+  let opened:Awaited<ReturnType<typeof resetLine>>|null=null;
+  for(let attempt=0;attempt<8&&!opened;attempt++){
+    const busy=await db.botApodInbox.count({where:{expedienteId:line.caseId,status:'PENDING'}})+await db.botApodAccion.count({where:{expedienteId:line.caseId,status:{in:['PENDING','RUNNING']}}});
+    if(!busy){await clearQueueFor([line.caseId]);try{opened=await resetLine(db,line.phone);}catch{/* retry */}}
+    if(!opened)await new Promise(r=>setTimeout(r,5000));
+  }
+  if(!opened)throw new Error('LINE_BUSY');
+  const {caseId,started}=opened;
   const opening=await officeReplies(db,caseId,new Date(started.getTime()-1),{firstWithinMs:60_000,settleMs:2_000});
   const transcript:Line[]=opening.map(text=>({who:'bot' as const,text}));
   let end='max_turns';
@@ -140,12 +149,13 @@ async function run(p:Persona,line:typeof lines[number]):Promise<Result>{
     for(const text of replies)transcript.push({who:'bot',text});
     if(!replies.length){
       const c=await db.botApodExpediente.findUniqueOrThrow({where:{id:caseId},select:{automationPaused:true}});
-      if(c.automationPaused){transcript.push({who:'bot',text:'(sin respuesta: caso en manos de una persona)'});end='traspaso a persona';break;}
+      const state=(await db.botApodExpediente.findUniqueOrThrow({where:{id:caseId},select:{currentState:true}})).currentState;
+      if(c.automationPaused||state==='ESCALATED_HUMAN'){transcript.push({who:'bot',text:'(sin respuesta: caso en manos de una persona)'});end='traspaso a persona';break;}
       transcript.push({who:'bot',text:'(sin respuesta)'});
     }
   }
   const c=await db.botApodExpediente.findUniqueOrThrow({where:{id:caseId},select:{currentState:true,automationPaused:true}});
-  const verdict=await judge(p,transcript,`${c.currentState}${c.automationPaused?' (pausado: atendido por persona)':''}`);
+  const verdict=await judge(p,transcript,`${c.currentState}${c.automationPaused?' (pausado: atendido por persona)':''}`,line.document);
   return {id:p.id,line:line.phone,document:line.document,transcript,end,state:c.currentState,paused:c.automationPaused,mechanical:mechanicalProblems(transcript),verdict};
 }
 
@@ -164,7 +174,7 @@ await new Promise<void>(done=>{
         results.push(r);
         const v=r.verdict as {aprobado?:boolean;puntuaciones?:Record<string,number>};
         console.log(JSON.stringify({persona:r.id,aprobado:v.aprobado,scores:v.puntuaciones,end:r.end,state:r.state,mechanical:r.mechanical.length}));
-      }).catch(error=>{console.log(JSON.stringify({persona:p.id,error:String((error as Error).message).slice(0,200)}));})
+      }).catch(error=>{console.log(JSON.stringify({persona:p.id,error:String((error as Error).message).slice(0,200)}));if(!retried.has(p.id)){retried.add(p.id);queue.push(p);}})
         .finally(()=>{active--;free.push(line);pump();});
     }
   };
