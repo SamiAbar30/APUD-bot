@@ -46,6 +46,7 @@ ENV_FILE=.env.wce npx tsx scripts/training/train.ts --round=r8 --corpus=8 --seed
 ENV_FILE=.env.wce npx tsx scripts/training/replay.ts [file]         # word-for-word replay (default: manager 23 Sep)
 ```
 
+- The bot runs on `AI_MODEL` from `.env` (`gpt-6-luna` since 23 Sep; before that `gpt-5.6-luna`).
 - Simulated clients (`gpt-5.5`, a different model from the bot) play 36 situations in
   `scripts/training/personas.ts` plus N personas built from real client messages in the imported
   WhatsApp corpus. Each talks to the live stack: signed webhook → queue → worker → brain → state
@@ -68,6 +69,7 @@ ENV_FILE=.env.wce npx tsx scripts/training/replay.ts [file]         # word-for-w
 | 6 | 40/44 (91%) | one-time takeover offer when stuck; unsolicited code ≠ password |
 | 7 | 41/46 (89%) | side question answered before any workflow step; iPhone app wording |
 | 7b (the 8 hardest, rerun) | 6/8 | — |
+| 8 — bot on `gpt-6-luna` (same clients as round 7) | 44/46 (95.7%) | model switch only (`AI_MODEL` in `.env`) |
 
 Single-message coverage on real client messages (`eval-hard-cases`, no conversation history):
 70% → 76.7% on both seed 11 and seed 7 after the stuck-offer rule; the rule-based bot scored 80.8% on the same test,
