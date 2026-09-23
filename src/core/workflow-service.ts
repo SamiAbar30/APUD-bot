@@ -83,7 +83,7 @@ export class WorkflowService {
     const nextVersion=c.version+(changed?1:0);
     const updated=await tx.botApodExpediente.updateMany({where:{id:c.id,version:c.version},data:{...combined,currentState:decision.nextStep as ApodState,version:nextVersion}});
     if(updated.count!==1)throw new AppError('CASE_CHANGED_RELOAD',409);
-      await tx.botApodAuditLog.create({data:{expedienteId:c.id,event:type,fromState:c.currentState,toState:decision.nextStep as ApodState,operator,metadata:json({decision,version:nextVersion,evidence:Object.fromEntries(Object.entries(payload).filter(([key])=>['evidenceRef','clientEvidenceRef','paymentEvidenceRef','operatorId','requestActionId','contextId','messageId','messageSha256','conversationOption','conversationConfidence','conversationClassification','conversationReviewReason','conversationResponseId','conversationRolloutPhase','conversationRolloutKind','responseId','rolloutPhase','rolloutKind','sha256','documentId','reviewedDraftId','reviewedDraftSha256'].includes(key)))})}});
+      await tx.botApodAuditLog.create({data:{expedienteId:c.id,event:type,fromState:c.currentState,toState:decision.nextStep as ApodState,operator,metadata:json({decision,version:nextVersion,evidence:Object.fromEntries(Object.entries(payload).filter(([key])=>['evidenceRef','clientEvidenceRef','paymentEvidenceRef','operatorId','requestActionId','contextId','messageId','messageSha256','conversationOption','conversationConfidence','conversationClassification','conversationReviewReason','conversationResponseId','conversationRolloutPhase','conversationRolloutKind','responseId','rolloutPhase','rolloutKind','sha256','documentId','reviewedDraftId','reviewedDraftSha256','brainUnderstanding','brainProgress','brainNote','brainLead','silent'].includes(key)))})}});
     if(decision.actionRequired!=='NO_OP')await tx.botApodAccion.create({data:{expedienteId:c.id,decisionId:decision.decisionId,expectedVersion:nextVersion,actionType:decision.actionRequired,payload:json({...decision.actionPayload,contextStep:combined.stepReached??c.stepReached,...(payload.requiresHumanReview===true?{humanHandoff:true,handoffReason:payload.handoffReason??'HUMANO'}:{})}),idempotencyKey:`apod-${decision.decisionId}`,status:decision.actionRequired==='ESCALATE_HUMAN'?'HUMAN_REQUIRED':'PENDING'}});
     if(decision.actionPayload.kind==='ESCALATE_HUMAN'&&type!==EventType.CLIENT_OPT_OUT&&!c.optOutAt&&decision.actionPayload.clientNoticeTemplate)await tx.botApodAccion.create({data:{expedienteId:c.id,decisionId:randomUUID(),expectedVersion:nextVersion,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({template:payload.requiresHumanReview===true?'CONVERSATION_REPLY':'HUMAN_HANDOFF_NOTICE',...(payload.requiresHumanReview===true?{variables:{replyText:payload.responseText},contextStep:c.stepReached}:{}),parentDecisionId:decision.decisionId,humanHandoff:true,handoffReason:payload.handoffReason??'HUMANO'}),idempotencyKey:`handoff-${decision.decisionId}`}});
     if(type===EventType.OPERATOR_SUBMISSION_CONFIRMED)await tx.botApodHumanTask.updateMany({where:{expedienteId:c.id,kind:'ASSISTED_PROCESSING',status:'OPEN'},data:{status:'RESOLVED',resolvedAt:new Date(),resolvedBy:operator,resolutionRef:String(payload.evidenceRef)}});
@@ -259,15 +259,20 @@ export class WorkflowService {
           const declinesSharing=!c.optOutAt&&c.currentState===ApodState.ESCALATED_HUMAN
             &&/no (?:te |os )?(?:lo |la )?(?:quiero|voy a|pienso) (?:enviar|mandar|pasar|compartir)|no (?:lo|la) (?:envio|mando|comparto)|prefiero no (?:enviar|mandar|compartir)|no quiero compartir (?:mi|el) certificado|no pienso enviarlo/
               .test(String((row.payload as Record<string,unknown>).text??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase());
-          if(declinesSharing)await this.db.botApodExpediente.update({where:{id},data:{automationPaused:false}});
-          if((c.automationPaused||c.optOutAt)&&!declinesSharing){
+          // A case a person holds cannot take workflow events (the decision contract rejects them), so
+          // every message goes to that person. Unpausing it here used to leave the message pending for
+          // good with no reply. A refusal to share still gets the two routes that need nothing sent.
+          if(c.automationPaused||c.optOutAt||c.currentState===ApodState.ESCALATED_HUMAN){
             await this.db.$transaction(async tx=>{
               await tx.botApodInbox.update({where:{id:row.id},data:{status:'HUMAN_REQUIRED',lastError:'AUTOMATION_PAUSED',processedAt:new Date()}});
               if(!c.optOutAt)await tx.botApodHumanTask.upsert({where:{dedupeKey:`inbox:${row.id}`},create:{expedienteId:id,dedupeKey:`inbox:${row.id}`,kind:'CONVERSATION_REVIEW',reason:'Nuevo mensaje durante el traspaso al equipo.',evidence:json({inboxId:row.id,stepReached:c.stepReached})},update:{}});
               // Silence reads as abandonment: acknowledge once per hold while a person takes over.
               if(!c.optOutAt&&c.currentState===ApodState.ESCALATED_HUMAN){
-                const key=`held-ack-${id}-${c.version}`;
-                await tx.botApodAccion.upsert({where:{idempotencyKey:key},create:{expedienteId:id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:'Gracias, lo tengo apuntado. Una compañera del equipo lo está viendo y te escribe por aquí para seguir desde donde lo dejamos.'},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:key},update:{}});
+                const key=declinesSharing?`held-decline-${id}-${c.version}`:`held-ack-${id}-${c.version}`;
+                const ackText=declinesSharing
+                  ?'Entendido, no hace falta que nos mandes nada. Puedes hacerlo gratis en el juzgado, con cita en el decanato, o con la empresa colaboradora por 35 €. Una compañera del equipo te escribe por aquí para ayudarte con la opción que prefieras.'
+                  :'Gracias, lo tengo apuntado. Una compañera del equipo lo está viendo y te escribe por aquí para seguir desde donde lo dejamos.';
+                await tx.botApodAccion.upsert({where:{idempotencyKey:key},create:{expedienteId:id,decisionId:randomUUID(),expectedVersion:c.version,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({kind:'SEND_WHATSAPP_MESSAGE',template:'CONVERSATION_REPLY',variables:{replyText:ackText},contextStep:c.stepReached,humanHandoff:true,handoffReason:'HUMANO'}),idempotencyKey:key},update:{}});
               }
             });
             return;

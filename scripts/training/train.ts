@@ -120,7 +120,7 @@ if(!lines.length)throw new Error('NO_TRAINING_LINES: restart the stack so setup-
 const personas=[...PERSONAS.filter(p=>!only||only.includes(p.id)),...(only?[]:await corpusPersonas())];
 console.log(JSON.stringify({round,personas:personas.length,lines:lines.length,sim:SIM_MODEL,judge:JUDGE_MODEL}));
 
-type Result={id:string;line:string;document:string;transcript:Line[];end:string;state:string;paused:boolean;mechanical:string[];verdict:Record<string,unknown>};
+type Result={id:string;line:string;document:string;transcript:Line[];traces:string[];end:string;state:string;paused:boolean;mechanical:string[];verdict:Record<string,unknown>};
 const results:Result[]=[];
 const queue=[...personas];
 const free=[...lines];
@@ -134,11 +134,13 @@ async function run(p:Persona,line:typeof lines[number]):Promise<Result>{
     if(!busy){await clearQueueFor([line.caseId]);try{opened=await resetLine(db,line.phone);}catch{/* retry */}}
     if(!opened)await new Promise(r=>setTimeout(r,5000));
   }
-  if(!opened)throw new Error('LINE_BUSY');
+  // Still busy after 40 s means a stuck row, not a reply in flight: the reset clears it anyway.
+  if(!opened){await clearQueueFor([line.caseId]);opened=await resetLine(db,line.phone);}
   const {caseId,started}=opened;
   const opening=await officeReplies(db,caseId,new Date(started.getTime()-1),{firstWithinMs:60_000,settleMs:2_000});
   const transcript:Line[]=opening.map(text=>({who:'bot' as const,text}));
   let end='max_turns';
+  const traces:string[]=[];
   for(let turn=0;turn<maxTurns;turn++){
     const next=await simulateClient(p,transcript);
     if(next.done){end=`cliente: ${next.why}`;break;}
@@ -146,6 +148,8 @@ async function run(p:Persona,line:typeof lines[number]):Promise<Result>{
     await sendText(line.phone,next.text);
     transcript.push({who:'cliente',text:next.text});
     const replies=await officeReplies(db,caseId,before);
+    const audits=await db.botApodAuditLog.findMany({where:{expedienteId:caseId,createdAt:{gt:before}},orderBy:{createdAt:'asc'},select:{event:true,fromState:true,toState:true,metadata:true}});
+    traces.push(`T${turn+1} «${next.text.slice(0,60)}» → `+(audits.map(a=>{const e=((a.metadata as {evidence?:Record<string,unknown>}|null)?.evidence)??{};return `${a.event} ${a.fromState}→${a.toState}${e.brainUnderstanding?` | entiende: ${e.brainUnderstanding}`:''}${e.brainNote?` | nota: ${e.brainNote}`:''}${e.brainLead?' | con frase previa':''}`;}).join(' ; ')||'sin evento'));
     for(const text of replies)transcript.push({who:'bot',text});
     if(!replies.length){
       const c=await db.botApodExpediente.findUniqueOrThrow({where:{id:caseId},select:{automationPaused:true}});
@@ -156,7 +160,7 @@ async function run(p:Persona,line:typeof lines[number]):Promise<Result>{
   }
   const c=await db.botApodExpediente.findUniqueOrThrow({where:{id:caseId},select:{currentState:true,automationPaused:true}});
   const verdict=await judge(p,transcript,`${c.currentState}${c.automationPaused?' (pausado: atendido por persona)':''}`,line.document);
-  return {id:p.id,line:line.phone,document:line.document,transcript,end,state:c.currentState,paused:c.automationPaused,mechanical:mechanicalProblems(transcript),verdict};
+  return {id:p.id,line:line.phone,document:line.document,transcript,traces,end,state:c.currentState,paused:c.automationPaused,mechanical:mechanicalProblems(transcript),verdict};
 }
 
 await new Promise<void>(done=>{
@@ -194,7 +198,7 @@ const md=[`# Ronda ${round}`,`Aprobadas ${approved}/${results.length} (${report.
   ...results.sort((a,b)=>Number((a.verdict as {aprobado?:boolean}).aprobado)-Number((b.verdict as {aprobado?:boolean}).aprobado)).map(r=>{
     const v=r.verdict as {aprobado?:boolean;resultado?:string;problemas?:Array<{turno?:number;problema?:string;deberia?:string}>};
     return [`## ${v.aprobado?'OK':'FALLA'} — ${r.id} (${r.document}, ${r.state}${r.paused?', con persona':''}; fin: ${r.end})`,v.resultado??'',
-      ...(v.problemas??[]).map(x=>`- L${x.turno}: ${x.problema} → ${x.deberia}`),...r.mechanical.map(m=>`- ${m}`),'','```',show(r.transcript),'```',''].join('\n');
+      ...(v.problemas??[]).map(x=>`- L${x.turno}: ${x.problema} → ${x.deberia}`),...r.mechanical.map(m=>`- ${m}`),'','```',show(r.transcript),'```','','<details><summary>Decisiones del bot</summary>','',...r.traces.map(t=>`- ${t}`),'</details>',''].join('\n');
   })].join('\n');
 await writeFile(`evidence/training/round-${round}.md`,md,{mode:0o600});
 console.log(JSON.stringify({round,approved,of:results.length,rate:report.approvalRate,average,mechanical:report.mechanical}));

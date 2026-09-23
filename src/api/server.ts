@@ -216,7 +216,9 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
             // the pause; a real question lifts it, so they are not left talking to a silent number.
             const asksSomething=/\?|donde|cuando|como|que hago|contrase|certificad|password|enviar|mandar/
               .test(text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase());
-            if(c&&(c.optOutAt||c.automationPaused)&&!stop&&(asksSomething||Boolean(m.media)))
+            // A case a person already holds stays with that person: lifting the pause there made the state
+            // machine reject every later message, and the client was left with no reply at all.
+            if(c&&(c.optOutAt||c.automationPaused)&&c.currentState!=='ESCALATED_HUMAN'&&!stop&&(asksSomething||Boolean(m.media)))
               await flow.db.botApodExpediente.updateMany({where:{id:c.id},data:{optOutAt:null,automationPaused:false}});
             // Secret chat text is never retained in the ordinary inbox or sent to the model.
             await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:stop?EventType.CLIENT_OPT_OUT:'CONVERSATION_TEXT',payload:{messageId:m.id,timestamp:m.timestamp,text,...(textHash?{messageSha256:textHash}:{}),...(m.media?{mediaId:m.media.id,mediaType:m.media.mimeType}:{})},source:'WHATSAPP',conversationText:text});

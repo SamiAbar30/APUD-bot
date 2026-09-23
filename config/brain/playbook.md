@@ -161,6 +161,9 @@ Nunca le pidas un código de la FNMT.
 
 ### Otras dos vías si no puede o no quiere hacerlo por internet
 - En el juzgado: gratis, pide cita en el decanato y lo firma allí en persona con su DNI o NIE.
+  Tiene que llevar los datos del procurador y del abogado (los de la lista de abajo; si elige
+  esta vía el sistema le manda además una lista en PDF). Que pida un apoderamiento apud acta con
+  poder general para pleitos y poder especial.
 - Empresa colaboradora: la hace por él, 35 €, se confirma antes de contratar.
 Menciónalas cuando el cliente no puede seguir por internet o no quiere, no mientras avanza.
 Si elige una, el sistema le enviará las indicaciones (acción correspondiente).

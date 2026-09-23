@@ -195,7 +195,12 @@ export function checkDecision(d: Record<string, unknown>, steps: Map<string, unk
   if (d.traspaso != null && !(HANDOFF_REASONS as readonly string[]).includes(String(d.traspaso)))
     return `Motivo de traspaso no válido. Usa null o uno de: ${HANDOFF_REASONS.join(', ')}.`;
   const text = cleanText(String(d.mensaje ?? ''));
-  if (action === 'SILENCIO' && d.traspaso == null) return null;
+  if (action === 'SILENCIO' && d.traspaso == null) {
+    // Silence is for a bare "vale" after instructions, never for an answer to our own question.
+    const last = [...history].reverse().find(m => m.role === 'assistant')?.content ?? '';
+    if (/\?\s*$/.test(last.trim()) || /\?/.test(clientText)) return 'El cliente está respondiendo a tu pregunta o preguntando algo: contesta, no uses SILENCIO.';
+    return null;
+  }
   if (!text) return action === 'RESPONDER' || d.traspaso != null ? 'Falta el mensaje para el cliente.' : null;
   // With a step, the message is a short lead in front of the step's approved message.
   if (steps.has(action) && text.length > 400) return 'Con un paso, "mensaje" es solo una frase breve que va delante del mensaje del sistema.';
