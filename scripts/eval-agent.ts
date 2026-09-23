@@ -14,6 +14,7 @@ import type {Expediente} from '../src/domain/models/expediente.js';
 import {redactConversationPii,type ConversationHistoryMessage} from '../src/core/conversation-policy.js';
 import {digest} from '../src/core/package-agent/package.js';
 import {agentRuntimeHash} from '../src/config/agent-release.js';
+import {brainFromEnv} from '../src/config/brain.js';
 
 type Scenario={id:string;desc:string;user_turns:string[];expect:string[];must_not:string[]};
 type Turn={input:string;reply:string;state:string;event:string;handoff:string|null;attachment:string|null};
@@ -34,7 +35,8 @@ try{
     // An in-memory replay, explicitly separate from evidence of live CRM execution.
     let c:BotApodExpediente={...stored,currentState:'WAITING_CERT_RESPONSE',hasDigitalCert:null,version:0,automationPaused:false,optOutAt:null};
     const model=new OpenAICompatibleConversationModel(config.config,reference.context);
-    const agent=new StrictConversationAgent(model,3);const history:ConversationHistoryMessage[]=[];const turns:Turn[]=[];
+    // Built exactly as the live server builds it, so the release gate grades what clients will talk to.
+    const agent=new StrictConversationAgent(model,3,await brainFromEnv(config.config));const history:ConversationHistoryMessage[]=[];const turns:Turn[]=[];
     for(const input of s.user_turns){
       if(c.automationPaused){turns.push({input:redactConversationPii(input),reply:'',state:c.currentState,event:'HALTED_AFTER_HANDOFF',handoff:null,attachment:null});continue;}
       const turn=await agent.turn(c,input,history);
@@ -68,7 +70,8 @@ try{
       case'pide_humano':checks.humanHandoff=hasHandoff('HUMANO')&&/disculpa/.test(combined)&&c.automationPaused;break;
       case'pide_sms':checks.rejectCode=/no (?:me )?envies.*sms/.test(combined);break;
       case'ya_hecho':checks.requestDocument=/pdf|documento/.test(combined)&&!/tienes certificado/.test(combined);break;
-      case'persona_mayor':checks.clientCertificate=/(?:certificado.{0,60}(?:tuyo|tu nombre|su nombre|del cliente|debe ser tu)|tu (?:propio )?certificado)/.test(combined);checks.familySupport=/hija|familiar|ayudar/.test(combined);checks.noAssumedCertificate=last.state==='WAITING_CERT_RESPONSE'&&c.hasDigitalCert!==true;break;
+      case'persona_mayor':// Tú or usted: the bot mirrors how the client writes, and both say the same thing.
+        checks.clientCertificate=/(?:certificado.{0,60}(?:tuyo|suyo|tu nombre|su nombre|nombre de usted|del cliente|debe ser tu)|tu (?:propio )?certificado)/.test(combined);checks.familySupport=/hija|familiar|ayudar/.test(combined);checks.noAssumedCertificate=last.state==='WAITING_CERT_RESPONSE'&&c.hasDigitalCert!==true;break;
     }
     const pass=Object.values(checks).every(Boolean);
     results.push({id:s.id,pass,checks,originalExpectations:s.expect,masterAlignment:amendments,turns,provider:model.metrics});

@@ -162,7 +162,10 @@ export class ActionExecutor {
         if(reconcileOnly)throw new AdapterError('WHATSAPP_DELIVERY_REQUIRES_RECONCILIATION','uncertain');
         const templateId=String((a.payload as Record<string,unknown>).template??'');
         const emulatorTransport=this.flow.env.WHATSAPP_TRANSPORT==='emulator';
-        if((!c.lastInboundAt||Date.now()-c.lastInboundAt.getTime()>24*60*60*1000)&&!emulatorTransport){
+        // Without approved templates, the gateway sends the plain message and Meta enforces the 24-hour window itself:
+        // a refusal (131047) comes back as a certain failure, so nothing is left half-sent.
+        const plainThroughGateway=this.flow.env.WHATSAPP_TRANSPORT==='gateway'&&!this.flow.env.WA_TEMPLATE_CONFIG_FILE;
+        if((!c.lastInboundAt||Date.now()-c.lastInboundAt.getTime()>24*60*60*1000)&&!emulatorTransport&&!plainThroughGateway){
           const template=await approvedTemplate(this.flow.env.WA_TEMPLATE_CONFIG_FILE,templateId,c);
           await beforeEffect();const accepted=await this.wa.sendTemplate(c.telefono,template.name,template.language,template.parameters);
           return {receipt:{...accepted,to:c.telefono,template:templateId,templateName:template.name,reviewEvidenceRef:template.reviewEvidenceRef,historyText:`Plantilla aprobada: ${templateId}`},...(templateId==='COMPLETION_NOTICE'?{event:E.delivered}:{}),awaitDelivery:true};
