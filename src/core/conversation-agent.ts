@@ -292,7 +292,14 @@ export class StrictConversationAgent {
       // client who never sent anything.
       const deliveredSecret=/REDACTADA|CONTENIDO_SENSIBLE/i.test(text)||redactConversationPii(text)!==text;
       const asksUsForTheirs=/dime (?:cual es )?mi (?:contrase|clave)|cual es mi (?:contrase|clave)|no se mi (?:contrase|clave)|me (?:la |lo )?puedes decir/i.test(text);
-      reply=deliveredSecret&&!asksUsForTheirs
+      // A redacted value is only the certificate password if the office asked for it: otherwise it
+      // is usually an SMS or FNMT code, and "recibido, lo gestionamos" would accept a code we never
+      // use (training round 6).
+      const passwordRequested=history.filter(m=>m.role==='assistant').slice(-4).some(m=>/contrase[ñn]a/i.test(m.content)&&/(?:m[aá]nda|env[ií]a|pasa)(?:me|nos)|mensaje aparte|en otro mensaje/i.test(m.content))
+        ||history.filter(m=>m.role==='user').slice(-3).some(m=>/te (?:lo |la )?(?:mando|env[ií]o|paso)|certificad|\.p12|\.pfx|archivo/i.test(m.content));
+      reply=deliveredSecret&&!asksUsForTheirs&&!passwordRequested
+        ?{text:'Por seguridad, no me mandes códigos ni claves por aquí: no los necesito y no los uso. Si era la contraseña de tu certificado, solo hace falta si lo hacemos nosotros; dime y te explico cómo.',requiresHumanReview:false}
+        :deliveredSecret&&!asksUsForTheirs
         // The client sent the certificate password: the office works with it, so acknowledge and
         // hand the case to a person instead of lecturing the client.
         ?{text:'Recibido, gracias. Lo gestionamos y te aviso en cuanto esté hecho.',requiresHumanReview:true,handoffReason:'CERTIFICADO_RECIBIDO'}
