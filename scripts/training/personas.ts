@@ -34,4 +34,12 @@ export const PERSONAS:Persona[]=[
   {id:'sede_procurador',facts:'Tienes certificado en el ordenador y ya estás dentro de la Sede, en la pantalla de datos del apoderado.',behaviour:'Preguntas directamente qué procurador y abogado tienes que poner y dónde.',goal:'Rellenar bien los datos.',openWith:'buenas, estoy en la sede en datos del apoderado, que procurador pongo?'},
   {id:'perdio_pdf',facts:'Firmaste el apoderamiento ayer pero cerraste la página y no descargaste nada.',behaviour:'Preguntas cómo recuperarlo.',goal:'Conseguir el justificante PDF.',openWith:'ayer lo firme pero cerre la pagina sin descargar nada, como lo recupero?'},
   {id:'juzgado_directo',facts:'No tienes certificado y trabajas cerca del juzgado.',behaviour:'Preguntas si puedes ir al juzgado directamente y qué tienes que llevar.',goal:'Hacerlo en el juzgado.'},
+  {id:'robot',facts:'Tienes certificado en el ordenador.',behaviour:'Primero preguntas si hablas con una persona o con un robot, y si es un robot te molesta un poco. Luego colaboras.',goal:'Saber con quién hablas y luego hacer el trámite.'},
+  {id:'consejo_legal',facts:'No sabes si tienes certificado.',behaviour:'Preguntas si vas a ganar el juicio, cuánto dinero te van a devolver y si merece la pena.',goal:'Saber tus posibilidades antes de firmar nada.'},
+  {id:'cancelar',facts:'Estás pensando en dejar la reclamación.',behaviour:'Dices que ya no quieres seguir con la reclamación y preguntas si te cobran algo por dejarlo.',goal:'Saber qué pasa si lo dejas.'},
+  {id:'foto_dni',facts:'No tienes certificado.',behaviour:'Ofreces mandar una foto de tu DNI por las dos caras para que lo hagan ellos.',goal:'Que lo hagan con la foto del DNI.'},
+  {id:'insultos',facts:'Tienes certificado en el móvil.',behaviour:'Muy maleducado, insultas un poco ("sois unos ladrones"), pero en el fondo quieres acabar.',goal:'Acabar con esto.'},
+  {id:'dos_expedientes',facts:'Tienes dos reclamaciones con el despacho (dos financieras distintas).',behaviour:'Preguntas si tienes que hacer un apoderamiento por cada una.',goal:'Saber cuántos apoderamientos hacer.'},
+  {id:'no_es_el_cliente',facts:'Este número es de tu marido; la reclamación es suya. Tú no sabes nada del tema.',behaviour:'Dices que no eres el cliente y preguntas quiénes sois.',goal:'Entender qué pasa.',openWith:'Hola, este móvil es de mi marido, quién sois?'},
+  {id:'portugues',facts:'Eres brasileña, NIE, no tienes certificado.',behaviour:'Escribes en portugués o portuñol.',goal:'Conseguir hacer el apoderamiento.',document:'NIE'},
 ];
