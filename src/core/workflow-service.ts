@@ -235,7 +235,7 @@ export class WorkflowService {
           const following=pending.slice(pending.findIndex(x=>x.id===row.id)+1);
           for(const next of following){
             const value=String((next.payload as Record<string,unknown>).text??'');
-            if(next.eventType!=='CONVERSATION_TEXT'||next.notBefore.getTime()!==fresh.notBefore.getTime()||size+1+value.length>4000||!relatedConversationText(turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')),value))break;
+            if(next.eventType!=='CONVERSATION_TEXT'||next.notBefore.getTime()!==fresh.notBefore.getTime()||size+1+value.length>4000||(requiresDeterministicHandoff(value)||!(this.conversationAgent?.readsWholeBursts||relatedConversationText(turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')),value))))break;
             const current=await this.db.botApodInbox.findUniqueOrThrow({where:{id:next.id}});
             if(current.status!=='PENDING'||current.notBefore.getTime()>Date.now())break;
             turnRows.push(current);size+=1+value.length;

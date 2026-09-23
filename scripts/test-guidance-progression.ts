@@ -77,7 +77,9 @@ const back=await apply('no i dont have it can you show me how to make it');
 assert.equal(c.currentState,'CERT_ACQUISITION_LINKS_SENT');
 assert.match(back.text,/opciones para conseguir el certificado digital/);
 assert.doesNotMatch(back.text,/juzgado|empresa colaboradora/);
-assert.deepEqual(back.buttons?.map(b=>b.id),['DEVICE_PC','DEVICE_MOBILE','NEEDS_ASSISTANCE']);
+// Live test 23 Sep: "Ya lo tengo en PC/móvil" under the options was tapped by a client with no
+// certificate. Only help stays as a button; "ya lo tengo" is understood when written.
+assert.deepEqual(back.buttons?.map(b=>b.id),['NEEDS_ASSISTANCE']);
 console.log('PASS exact reported turn produces digital guidance and help buttons through the FSM');
 
 c={...initial,currentState:ApodState.PC_TUTORIAL_SENT,hasDigitalCert:true,certDevice:'PC'};

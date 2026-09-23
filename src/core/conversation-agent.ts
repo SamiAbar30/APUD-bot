@@ -81,6 +81,11 @@ export class StrictConversationAgent {
     this.phase = ConversationPhaseSchema.parse(phase);
   }
 
+  /** The brain reads a burst of messages together, whatever each one is about. */
+  get readsWholeBursts(): boolean {
+    return Boolean(this.brain) && this.phase === 3;
+  }
+
   get rolloutPhase(): ConversationPhase {
     return this.phase;
   }
@@ -295,7 +300,8 @@ export class StrictConversationAgent {
       // A redacted value is only the certificate password if the office asked for it: otherwise it
       // is usually an SMS or FNMT code, and "recibido, lo gestionamos" would accept a code we never
       // use (training round 6).
-      const passwordRequested=history.filter(m=>m.role==='assistant').slice(-4).some(m=>/contrase[ñn]a/i.test(m.content)&&/(?:m[aá]nda|env[ií]a|pasa)(?:me|nos)|mensaje aparte|en otro mensaje/i.test(m.content))
+      const passwordRequested=['MOBILE_ASSIST_CONSENT_REQUESTED','MOBILE_ASSIST_PROCESSING'].includes(String(expediente.currentState))
+        ||history.filter(m=>m.role==='assistant').slice(-4).some(m=>/contrase[ñn]a/i.test(m.content)&&/(?:m[aá]nda|env[ií]a|pasa)(?:me|nos)|me (?:los|la|lo) mandas|mensaje aparte|en otro mensaje/i.test(m.content))
         ||history.filter(m=>m.role==='user').slice(-3).some(m=>/te (?:lo |la )?(?:mando|env[ií]o|paso)|certificad|\.p12|\.pfx|archivo/i.test(m.content));
       reply=deliveredSecret&&!asksUsForTheirs&&!passwordRequested
         ?{text:'Por seguridad, no me mandes códigos ni claves por aquí: no los necesito y no los uso. Si era la contraseña de tu certificado, solo hace falta si lo hacemos nosotros; dime y te explico cómo.',requiresHumanReview:false}

@@ -333,7 +333,7 @@ function toAcquisitionLinks(ctx: Ctx): TransitionResult {
   return decide(
     ctx,
     State.CERT_ACQUISITION_LINKS_SENT,
-    buttons(acquisitionTemplate(ctx.exp,ctx.payload.guidanceDocumentType), [ReplyButton.DEVICE_PC, ReplyButton.DEVICE_MOBILE, ReplyButton.NEEDS_ASSISTANCE], { identityDocumentType: type }),
+    buttons(acquisitionTemplate(ctx.exp,ctx.payload.guidanceDocumentType), [ReplyButton.NEEDS_ASSISTANCE], { identityDocumentType: type }),
     { note: 'No certificate: send official acquisition links for the identity document type', patch: { hasDigitalCert: false, certDevice: CertDevice.NONE, digitalHelpAttempts:0, certificateHelpAttempts:0 } },
   );
 }
@@ -353,6 +353,9 @@ function guidedHelp(ctx: Ctx): TransitionResult {
     patch:{digitalHelpAttempts:attempts,certificateHelpAttempts:copyAttempts},
   });
   if (hasCert && ctx.payload.copyLocated === true) return toConsentRequest(ctx, 'Client located the certificate copy: ask for consent to prepare it for them');
+  // Protocol 2.2: certificate on the phone and no computer means the office does it. Staying in the
+  // "do you have a computer?" step made the bot ask the same question again (live test 23 Sep).
+  if (hasCert && ctx.type === EventType.CLIENT_HAS_NO_PC) return toConsentRequest(ctx, 'No computer: the office prepares it with the client\'s certificate (protocol 2.2)');
   if (!hasCert && ctx.exp.hasDigitalCert === false && attempts >= 3 && failed) return fallback();
   if (hasCert && ctx.type === EventType.CLIENT_REQUESTS_ASSISTANCE && ctx.payload.takeoverRequested === true && copyAttempts > 0)
     return toConsentRequest(ctx, 'Client asked the office to take it over after the copy help: move to assisted processing');

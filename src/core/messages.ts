@@ -16,7 +16,9 @@ export interface OutgoingGuide {
 const help={id:'HUMAN_HELP',title:'Ayuda del gestor'} as const;
 const FNMT_APP='https://play.google.com/store/apps/details?id=es.fnmtrcm.ceres.certificadoDigitalFNMT&hl=en-US';
 const deviceButtons:OutgoingGuide['buttons']=[{id:'DEVICE_PC',title:'En el ordenador'},{id:'DEVICE_MOBILE',title:'En el móvil'},{id:'NEEDS_ASSISTANCE',title:'Necesito asistencia'}];
-const acquiredButtons:OutgoingGuide['buttons']=[{id:'DEVICE_PC',title:'Ya lo tengo en PC'},{id:'DEVICE_MOBILE',title:'Ya lo tengo en móvil'},{id:'NEEDS_ASSISTANCE',title:'Ayuda paso a paso'}];
+// Only help here: "Ya lo tengo en móvil" under the ways to get a certificate was tapped by a client
+// who had just said he had none (live test 23 Sep). "Ya lo tengo" is understood when written.
+const acquiredButtons:OutgoingGuide['buttons']=[{id:'NEEDS_ASSISTANCE',title:'Ayuda paso a paso'}];
 const revocationText=`El despacho te indicará qué poder debe corregirse y qué datos o facultades faltan. Confirma con el gestor el poder que debe sustituirse antes de revocarlo. Consulta tus poderes en la Sede Judicial (${officialLinks.sede}) y sigue las instrucciones revisadas del despacho. Envíanos el nuevo justificante completo para comprobar la sustitución.`;
 type Renderer=(c:BotApodExpediente,consentVersion?:string,variables?:TemplateVariables)=>OutgoingGuide;
 
