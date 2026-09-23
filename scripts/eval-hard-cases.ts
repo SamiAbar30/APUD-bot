@@ -20,6 +20,7 @@ import {StrictConversationAgent} from '../src/core/conversation-agent.js';
 import {evaluateNextStep} from '../src/core/decision-engine.js';
 import {messageForCase} from '../src/core/messages.js';
 import {caseMemory} from '../src/core/case-memory.js';
+import {brainFromEnv} from '../src/config/brain.js';
 
 const sampleSize=Number(process.argv.find(a=>a.startsWith('--sample='))?.slice(9)??40);
 const seed=process.argv.find(a=>a.startsWith('--seed='))?.slice(7)??'7';
@@ -82,7 +83,8 @@ const db=new PrismaClient();
 const reference=await loadReferenceAgentPackage(packageDir,process.env.APOD_MASTER_PROMPT_FILE);
 if(reference.status!=='LOADED')throw new Error('PACKAGE_REQUIRED');
 const model=new OpenAICompatibleConversationModel(aiConfig,reference.context);
-const agent=new StrictConversationAgent(model,3);
+// The live worker answers with the conversation brain unless CONVERSATION_BRAIN=off; measure what runs.
+const agent=new StrictConversationAgent(model,3,await brainFromEnv(aiConfig));
 const template=await db.botApodExpediente.findFirstOrThrow({where:{identityVerified:true}});
 
 /** Plausible states a hard message can arrive in, so coverage is not measured in one context only. */
