@@ -66,9 +66,11 @@ ENV_FILE=.env.wce npx tsx scripts/training/replay.ts [file]         # word-for-w
 | 4 | 37/42 (88%) | stop word inside a question, repeated e-mail, third-party privacy |
 | 5 | 41/44 (93%) | AutoFirma free, no Cl@ve signs, injection mixed with real question |
 | 6 | 40/44 (91%) | one-time takeover offer when stuck; unsolicited code ≠ password |
+| 7 | 41/46 (89%) | side question answered before any workflow step; iPhone app wording |
+| 7b (the 8 hardest, rerun) | 6/8 | — |
 
 Single-message coverage on real client messages (`eval-hard-cases`, no conversation history):
-70% → 76.7% (seed 11) after the stuck-offer rule; the rule-based bot scored 80.8% on the same test,
+70% → 76.7% on both seed 11 and seed 7 after the stuck-offer rule; the rule-based bot scored 80.8% on the same test,
 which it had been tuned against. The brain is weakest there on `confusion` messages seen with no
 context, which is not how they arrive live.
 
