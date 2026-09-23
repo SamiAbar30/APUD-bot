@@ -47,7 +47,9 @@
     "eval:hard-cases": "tsx scripts/eval-hard-cases.ts",
     "test:live": "tsx scripts/live-conversation-test.ts",
     "test:conversation-pacing": "node --import tsx scripts/test-conversation-pacing.ts",
-    "test:conversation-inbox": "node --import tsx scripts/test-conversation-inbox.ts"
+    "test:conversation-inbox": "node --import tsx scripts/test-conversation-inbox.ts",
+    "test:brain-guards": "tsx scripts/test-brain-guards.ts",
+    "train": "tsx scripts/training/train.ts"
   },
   "dependencies": {
     "@fastify/cors": "^10.0.1",
