@@ -22,7 +22,9 @@ const values = {
   POSTGRES_PASSWORD: required('POSTGRES_PASSWORD'), DATABASE_URL: required('DATABASE_URL'), REDIS_URL: required('REDIS_URL'),
   QUEUE_PREFIX: 'apod-wce', OPERATOR_TOKEN: required('OPERATOR_TOKEN'), LOG_LEVEL: 'info', STORAGE_DIR: './storage',
   MAX_DOCUMENT_BYTES: '15000000', OUTBOUND_ENABLED: 'true', WORKERS_ENABLED: 'true', DEMO_DATA_ENABLED: 'true',
-  DEMO_WHATSAPP_RECIPIENTS: '34663094035', WHATSAPP_ENABLED: 'true', WHATSAPP_TRANSPORT: 'emulator',
+  // The first number is the demo chat the manager sees; the rest are training lines the emulator
+  // accepts but never shows on screen.
+  DEMO_WHATSAPP_RECIPIENTS: ['34663094035', ...(source.TRAINING_PHONES || '34600000101,34600000102,34600000103,34600000104,34600000105,34600000106,34600000107,34600000108').split(',').map(p => p.trim()).filter(Boolean)].join(','), WHATSAPP_ENABLED: 'true', WHATSAPP_TRANSPORT: 'emulator',
   WA_GRAPH_VERSION: 'v23.0', WA_API_BASE_URL: 'http://127.0.0.1:3001/send-to-emulator',
   WA_ACCESS_TOKEN: 'wce-local-access-token', WA_PHONE_NUMBER_ID: '999000000000', WA_BUSINESS_ACCOUNT_ID: 'wce-local-business',
   WA_APP_SECRET: appSecret, WA_VERIFY_TOKEN: verifyToken, WA_TEMPLATE_CONFIG_FILE: '',
@@ -34,6 +36,7 @@ const values = {
   // The simulator answers as soon as the tester stops typing. Production keeps the 60s default,
   // where the wait is what lets a burst of client messages be read as one turn.
   CONVERSATION_QUIET_MS: source.CONVERSATION_QUIET_MS || '1000',
+  CONVERSATION_BRAIN: source.CONVERSATION_BRAIN || 'on', BRAIN_MODEL: source.BRAIN_MODEL || '', BRAIN_REASONING_EFFORT: source.BRAIN_REASONING_EFFORT || '',
   GEMINI_API_KEY: source.GEMINI_API_KEY || '', ANTHROPIC_API_KEY: source.ANTHROPIC_API_KEY || '', APOD_AGENT_PACKAGE_DIR: source.APOD_AGENT_PACKAGE_DIR || '',
   APOD_MASTER_PROMPT_FILE:source.APOD_MASTER_PROMPT_FILE||'docs/source/apud_acta_master_prompt.md',APOD_AGENT_EVAL_REPORT:source.APOD_AGENT_EVAL_REPORT||'evidence/agent-evaluations.json',
   AI_MODE: source.AI_MODE || 'online', LOCAL_AI_BASE_URL: source.LOCAL_AI_BASE_URL || 'http://127.0.0.1:11434/v1', LOCAL_AI_MODEL: source.LOCAL_AI_MODEL || '', LOCAL_AI_API_KEY: source.LOCAL_AI_API_KEY || '',

@@ -271,7 +271,7 @@ export class WorkflowService {
           }
           if(!this.conversationAgent)throw new AppError('CONVERSATION_AGENT_NOT_CONFIGURED');
           const sourceMessage=await this.db.botApodMessage.findUnique({where:{externalId:row.externalId}});
-          const history=await this.db.botApodMessage.findMany({where:{expedienteId:id,externalId:{notIn:turnRows.map(x=>x.externalId)},OR:[{role:'assistant'},{createdAt:{lt:sourceMessage?.createdAt??row.createdAt}}]},orderBy:[{createdAt:'desc'},{id:'desc'}],take:12});
+          const history=await this.db.botApodMessage.findMany({where:{expedienteId:id,externalId:{notIn:turnRows.map(x=>x.externalId)},OR:[{role:'assistant'},{createdAt:{lt:sourceMessage?.createdAt??row.createdAt}}]},orderBy:[{createdAt:'desc'},{id:'desc'}],take:40});
           // Approved Meta templates store a marker instead of their body in history.
           // An accepted opening receipt works for both transports, across all history.
           const sentOpening=await this.db.botApodAccion.findFirst({where:{expedienteId:id,status:{in:['AWAITING_DELIVERY','EXECUTED']},receipt:{path:['template'],equals:'ASK_HAS_CERT'}},select:{id:true}});

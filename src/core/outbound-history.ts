@@ -10,9 +10,11 @@ import {redactConversationPii} from './conversation-policy.js';
  */
 /** The office's own published address is not client data; keeping it makes history readable. */
 const OFFICE_EMAIL = 'reclamaciones@litigios.es';
+/** Other public links the approved templates and the playbook give out. */
+const PUBLIC_LINKS = ['https://firmaelectronica.gob.es/Home/Descargas.htm', 'https://play.google.com/store/apps/details?id=es.fnmtrcm.ceres.certificadoDigitalFNMT&hl=en-US'];
 
 export function redactOutboundHistory(text: string): string {
-  const approved = [...Object.values(officialLinks), OFFICE_EMAIL];
+  const approved = [...Object.values(officialLinks), ...PUBLIC_LINKS, OFFICE_EMAIL];
   let masked = text;
   approved.forEach((url, index) => {masked = masked.split(url).join(`_APPROVEDLINK${index}_`);});
   let redacted = redactConversationPii(masked);

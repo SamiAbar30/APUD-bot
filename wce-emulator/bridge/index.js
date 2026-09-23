@@ -81,8 +81,12 @@ app.post("/send-to-emulator", (req, res) => {
       JSON.stringify({ type: simpleMessage.type })
     );
 
-    emitUiMessage(simpleMessage);
-    console.log("📤 Sent to UI clients");
+    // Training lines run many simulated clients at once; only the demo number reaches the screen.
+    const demoPhone = process.env.WCE_SENDER_PHONE || "";
+    if (!demoPhone || !fullPayload.to || String(fullPayload.to) === demoPhone) {
+      emitUiMessage(simpleMessage);
+      console.log("📤 Sent to UI clients");
+    }
 
     // Match the WhatsApp Cloud API response shape so the bot can persist a
     // durable message id and reconcile delivery without any Meta call.

@@ -27,6 +27,7 @@ import { phaseOneRoutes } from './phase-one.routes.js';
 import { addressRoutes } from './address.routes.js';
 import type { ReplyButtonId } from '../contracts/whatsapp.contract.js';
 import { StrictConversationAgent } from '../core/conversation-agent.js';
+import { brainFromEnv } from '../config/brain.js';
 import { sha256 } from '../adapters/common/http.js';
 import { OpenAICompatibleConversationModel } from '../adapters/ai/openai-compatible-conversation.js';
 import { conversationAiFromEnv } from '../config/conversation-ai.js';
@@ -77,7 +78,8 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
   const conversationModel=conversationAiEnabled&&conversationAi.status==='CONFIGURED'
     ? new OpenAICompatibleConversationModel(conversationAi.config, referenceAgent.status==='LOADED'?referenceAgent.context:undefined)
     : undefined;
-  const conversationAgent=new StrictConversationAgent(conversationModel,env.CONVERSATION_PHASE);
+  const conversationBrain=conversationAiEnabled&&conversationAi.status==='CONFIGURED'?await brainFromEnv(conversationAi.config):undefined;
+  const conversationAgent=new StrictConversationAgent(conversationModel,env.CONVERSATION_PHASE,conversationBrain);
   if(env.WHATSAPP_TRANSPORT==='meta'&&env.WHATSAPP_ENABLED&&env.OUTBOUND_ENABLED&&referenceAgent.context?.packageHash&&conversationAi.config)await requireAgentEvaluations(env.APOD_AGENT_EVAL_REPORT,referenceAgent.context.packageHash,conversationAi.config.model);
   flow.conversationAgent=conversationAgent;
   const server=Fastify({logger:{level:env.LOG_LEVEL,redact:['req.headers.authorization','req.headers.cookie','body','password','pfx','certificate']},disableRequestLogging:true,bodyLimit:256*1024,requestTimeout:300000,connectionTimeout:30000,trustProxy:false});

@@ -6,6 +6,7 @@ const OPTION_EVENT_HAS_CERT=Events.CLIENT_HAS_CERT;
 import { officialLinks } from './guides.js';
 import { outsideWorkflowTopic, outsideTopicReply, wroteAndWaits, sentUsSomething, WAITING_FOR_REPLY, RECEIVED_IT } from './topic-routing.js';
 import { completeReply } from './compound-reply.js';
+import type { ConversationBrain, BrainCase } from './conversation-brain.js';
 import { CONVERSATION_INTENTS, CONVERSATION_INTENT_GUIDE, replyForIntent, type ConversationIntent } from './conversation-intent.js';
 import { DIGITAL_GUIDANCE_STATES, conversationYield, declaredDocumentType, guidanceRequest, isConversationQuestion, reviewedConversationReply, type CaseContext } from './conversation-guidance.js';
 import {
@@ -76,7 +77,7 @@ export class StrictConversationAgent {
   memory?: string;
   private readonly phase: ConversationPhase;
 
-  constructor(private readonly model?: ConversationModel, phase: ConversationPhase = 3) {
+  constructor(private readonly model?: ConversationModel, phase: ConversationPhase = 3, private readonly brain?: ConversationBrain) {
     this.phase = ConversationPhaseSchema.parse(phase);
   }
 
@@ -251,6 +252,13 @@ export class StrictConversationAgent {
 
   private async decideTurn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[],introduced:boolean,memory:string|undefined=this.memory):Promise<{type:EventType;payload:Record<string,unknown>}>{
     const n=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
+    // The brain reads the conversation and decides. Only messages that must never depend on a
+    // model stay below: a delivered secret, an injection attempt, a stop request, an offered code.
+    // The branches below are also the fallback when the model cannot be reached.
+    if(this.brain&&this.phase===3&&!requiresDeterministicHandoff(text)&&text!=='[CONTENIDO_SENSIBLE_OMITIDO]'&&!/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)){
+      const decided=await this.brain.decide(expediente as BrainCase,text,history,memory);
+      if(decided)return decided;
+    }
     let reply:ConversationReply|undefined;
     const yielded=this.phase===3&&!requiresDeterministicHandoff(text)?conversationYield(text)??undefined:undefined;
     if(this.phase===3&&!requiresDeterministicHandoff(text)){
