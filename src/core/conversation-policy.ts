@@ -146,11 +146,12 @@ function allowedOptions(expediente: Pick<BotApodExpediente, 'currentState' | 'ha
     case State.WAITING_PDF_SUBMISSION:
       return ['NEEDS_ASSISTANCE','HUMAN_HELP'];
     case State.MOBILE_TRIAGE_PC_CHECK:
-      return ['HAS_PC', 'NO_PC', 'NEEDS_ASSISTANCE'];
+      // "Ya lo tengo en el ordenador" can come from any phone step: it leads to the PC guide.
+      return ['HAS_PC', 'NO_PC', 'DEVICE_PC', 'NEEDS_ASSISTANCE'];
     case State.MOBILE_EXPORT_GUIDE_SENT:
       return ['DEVICE_PC', 'NEEDS_ASSISTANCE'];
     case State.MOBILE_ASSIST_CONSENT_REQUESTED:
-      return ['CONSENT_YES', 'CONSENT_NO'];
+      return ['CONSENT_YES', 'CONSENT_NO', 'DEVICE_PC'];
     case State.MOBILE_ASSIST_PROCESSING:
       return ['HUMAN_HELP'];
     case State.CERT_ACQUISITION_LINKS_SENT:

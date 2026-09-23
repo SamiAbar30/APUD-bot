@@ -26,7 +26,7 @@ import { boundedConversationHistory, redactConversationPii } from '../core/conve
 import { assistedRoutes } from './assisted.routes.js';
 import { phaseOneRoutes } from './phase-one.routes.js';
 import { addressRoutes } from './address.routes.js';
-import type { ReplyButtonId } from '../contracts/whatsapp.contract.js';
+import { REPLY_BUTTON_TEXT, type ReplyButtonId } from '../contracts/whatsapp.contract.js';
 import { StrictConversationAgent } from '../core/conversation-agent.js';
 import { brainFromEnv } from '../config/brain.js';
 import { sha256 } from '../adapters/common/http.js';
@@ -196,9 +196,20 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
   const debounce=new DebounceBuffer(flow.db,queues.inbound,env.CONVERSATION_QUIET_MS);
   /** One intake for every WhatsApp transport: the signed webhook and the gateway stream land here alike. */
   async function ingestEnvelope(envelope:ReturnType<typeof normalizeWebhook>){
-    for(const m of envelope.messages){
+    for(const inbound of envelope.messages){
+      let m=inbound;
       const duplicate=await flow.db.botApodInbox.findUnique({where:{externalId:m.id}});if(duplicate)continue;
       const c=await flow.db.botApodExpediente.findUnique({where:{telefono:m.from}});
+      // A button answers the message that carried it. Tapped under an older message it no longer
+      // answers the current question (live test 23 Sep: two old taps flipped a client with no
+      // certificate to "has one on mobile"), so it is read as what the client typed instead.
+      // Consent and draft buttons keep their own stricter check below.
+      if(c&&m.buttonId&&!['CONSENT_YES','CONSENT_NO','DRAFT_APPROVED','DRAFT_REJECTED'].includes(m.buttonId)){
+        const lastSent=await flow.db.botApodAccion.findFirst({where:{expedienteId:c.id,actionType:{in:['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA']},status:{in:['EXECUTED','AWAITING_DELIVERY']}},orderBy:{createdAt:'desc'},select:{receipt:true}});
+        const lastId=(lastSent?.receipt as {messageId?:unknown}|null)?.messageId;
+        if(!m.contextId||m.contextId!==lastId){const {buttonId,buttonTitle:_t,...rest}=m;m={...rest,type:'text',textPresent:true,text:m.buttonTitle??REPLY_BUTTON_TEXT[buttonId]};}
+      }
+      const buttonText=m.buttonId?(m.buttonTitle??REPLY_BUTTON_TEXT[m.buttonId]):undefined;
       const textBytes=m.text?Buffer.from(m.text,'utf8'):undefined;
       const textHash=textBytes?sha256(textBytes):undefined;
       textBytes?.fill(0);
@@ -248,7 +259,7 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
         if(!c||!previous||previous.expectedVersion!==c.version||receipt?.template!==requestedTemplate)event=E.help;
         else payload={...payload,consentVersion:typeof receipt.consentVersion==='string'?receipt.consentVersion:'',evidenceRef:m.id,contextId:m.contextId!,requestActionId:previous.id,requestVersion:previous.expectedVersion,documentId:typeof receipt.documentId==='string'?receipt.documentId:'',sha256:typeof receipt.documentSha256==='string'?receipt.documentSha256:''};
       }
-      await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:event,payload,source:'WHATSAPP',...(m.text?{conversationText:m.text}:{})});
+      await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:event,payload,source:'WHATSAPP',...(m.text?{conversationText:m.text}:buttonText?{conversationText:buttonText}:{})});
     }
     // Delivery callbacks must be durable even if received before send response is committed.
     for(const s of envelope.statuses){await flow.db.botApodInbox.upsert({where:{externalId:`wa-status-${s.id}-${s.status}`},create:{externalId:`wa-status-${s.id}-${s.status}`,source:'WHATSAPP_STATUS',eventType:'DELIVERY_STATUS',payload:json(s),status:'PENDING'},update:{}});}

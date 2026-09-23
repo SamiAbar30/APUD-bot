@@ -269,7 +269,13 @@ export class ActionExecutor {
       if(action.status==='EXECUTED')return true;
       if(!['AWAITING_DELIVERY','UNCERTAIN'].includes(action.status))return false;
       if(status.status==='sent')return true;
-      if(status.status==='failed'){await this.flow.db.botApodAccion.update({where:{id:a.id},data:{status:'FAILED',lastError:`WHATSAPP_DELIVERY_FAILED_${status.errorCodes.join('_')}`}});return true;}
+      if(status.status==='failed'){
+        await this.flow.db.botApodAccion.update({where:{id:a.id},data:{status:'FAILED',lastError:`WHATSAPP_DELIVERY_FAILED_${status.errorCodes.join('_')}`}});
+        // The client never saw it, so it is not part of the conversation: a refused opening left in
+        // history made the bot skip its introduction (live test 23 Sep, Meta 131047).
+        await this.flow.db.botApodMessage.deleteMany({where:{externalId:`outbox:${a.id}`}});
+        return true;
+      }
       const receipt=action.receipt as Record<string,unknown>;
       await this.flow.db.$transaction(async tx=>{
         await tx.botApodAccion.update({where:{id:a.id},data:{status:'EXECUTED',executedAt:new Date(),receipt:json({...receipt,deliveryStatus:status.status,deliveryTimestamp:status.timestamp})}});

@@ -18,8 +18,8 @@ const Message = z.object({
   id:z.string().min(1).max(256),from:z.string().regex(/^\d{5,20}$/),timestamp:z.string().regex(/^\d+$/),type:z.string(),
   text:z.object({body:z.string().min(1).max(4000)}).optional(),
   context:z.object({id:z.string().max(256)}).optional(),document:Media.optional(),image:Media.optional(),
-  interactive:z.object({button_reply:z.object({id:z.string().max(256)}).optional(),list_reply:z.object({id:z.string().max(256)}).optional()}).optional(),
-  button:z.object({payload:z.string().max(256)}).optional(),
+  interactive:z.object({button_reply:z.object({id:z.string().max(256),title:z.string().max(256).optional()}).optional(),list_reply:z.object({id:z.string().max(256),title:z.string().max(256).optional()}).optional()}).optional(),
+  button:z.object({payload:z.string().max(256),text:z.string().max(256).optional()}).optional(),
 });
 const Status = z.object({id:z.string().min(1).max(256),recipient_id:z.string().regex(/^\d{5,20}$/),timestamp:z.string().regex(/^\d+$/),status:z.enum(['sent','delivered','read','failed']),errors:z.array(z.object({code:z.number().int()})).optional()});
 const Envelope = z.object({object:z.literal('whatsapp_business_account'),entry:z.array(z.object({changes:z.array(z.object({field:z.string(),value:z.object({metadata:z.object({phone_number_id:z.string()}),messages:z.array(z.unknown()).optional(),statuses:z.array(z.unknown()).optional()})}))}))});
@@ -40,7 +40,11 @@ export function normalizeWebhook(payload: unknown, expectedPhoneNumberId: string
       const clean:WhatsAppInboundMessage={id:m.id,from:m.from,timestamp,phoneNumberId:expectedPhoneNumberId,type,textPresent:type==='text',...(type==='text'&&m.text?.body?{text:m.text.body}:{})};
       if(m.context) clean.contextId=m.context.id;
       const button=ReplyButtonIdSchema.safeParse(m.interactive?.button_reply?.id ?? m.interactive?.list_reply?.id ?? m.button?.payload);
-      if(button.success) clean.buttonId=button.data;
+      if(button.success){
+        clean.buttonId=button.data;
+        const title=(m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? m.button?.text)?.trim();
+        if(title) clean.buttonTitle=title.slice(0,100);
+      }
       const media=type==='document'?m.document:type==='image'?m.image:undefined;
       if(media) clean.media={id:media.id,mimeType:media.mime_type,...(media.sha256?{sha256:media.sha256}:{}),...(media.filename?{filename:media.filename}:{})};
       messages.push(clean);

@@ -41,7 +41,7 @@ const STATE_MEANING: Record<string, string> = {
   WAITING_CERT_RESPONSE: 'Le preguntamos si tiene certificado digital (y dónde).',
   MOBILE_TRIAGE_PC_CHECK: 'Tiene el certificado en el móvil; le preguntamos si tiene ordenador.',
   MOBILE_EXPORT_GUIDE_SENT: 'Le explicamos cómo pasar el certificado del móvil al ordenador.',
-  MOBILE_ASSIST_CONSENT_REQUESTED: 'Le preguntamos si nos manda su certificado y contraseña para hacerlo nosotros (responde con los botones).',
+  MOBILE_ASSIST_CONSENT_REQUESTED: 'Lo hacemos nosotros (no tiene ordenador o nos lo pidió): le pedimos el archivo del certificado por aquí y la contraseña en un mensaje aparte. Si no sabe sacar la copia del móvil, explícale la flecha azul. No le vuelvas a preguntar si tiene ordenador.',
   MOBILE_ASSIST_PROCESSING: 'Aceptó que lo hagamos nosotros; esperamos su archivo y contraseña.',
   PC_TUTORIAL_SENT: 'Tiene el certificado en el ordenador: ya le enviamos la guía PDF con los procuradores, el enlace de la Sede y AutoFirma. Ahora le acompañamos a hacerlo en la Sede y esperamos el PDF final.',
   WAITING_PDF_SUBMISSION: 'Esperamos que nos envíe el PDF del apud acta.',
@@ -67,7 +67,10 @@ export class ConversationBrain {
   /** Returns null only when the model could not be reached; the caller then uses its fallback. */
   async decide(c: BrainCase, text: string, history: readonly ConversationHistoryMessage[], memory?: string): Promise<BrainTurn | null> {
     const steps = this.availableSteps(c, history);
-    const system = this.systemPrompt(c, steps, memory);
+    // Whether the client has actually read our introduction comes from the chat itself: a refused
+    // opening is removed from it, while the case memory only knows that the client has written.
+    const introduced = history.some(m => m.role === 'assistant' && /dayana|litigios|Plantilla aprobada: ASK_HAS_CERT/i.test(m.content));
+    const system = this.systemPrompt(c, steps, introduced ? memory : memory?.replace(/[^.]*no vuelvas a presentarte[^.]*\./gi, ''), introduced);
     const cleanHistory = recentHistory(history);
     let feedback: string | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
@@ -118,7 +121,7 @@ export class ConversationBrain {
     }
   }
 
-  private systemPrompt(c: BrainCase, steps: Map<string, { preview: string }>, memory?: string): string {
+  private systemPrompt(c: BrainCase, steps: Map<string, { preview: string }>, memory?: string, introduced = true): string {
     const now = new Date();
     const hour = Number(new Intl.DateTimeFormat('es-ES', { hour: 'numeric', hour12: false, timeZone: 'Europe/Madrid' }).format(now));
     const document = /^[XYZ]/i.test(c.dni ?? '') ? 'NIE' : /^\d{8}[A-Z]$/i.test(c.dni ?? '') ? 'DNI' : 'sin confirmar';
@@ -133,13 +136,15 @@ ${this.firmFacts ? `## Datos del despacho\n${this.firmFacts}\n` : ''}
 - Certificado digital según el sistema: ${c.hasDigitalCert === true ? 'sí' : c.hasDigitalCert === false ? 'no' : 'sin confirmar'}${c.certDevice === 'PC' ? ', en el ordenador' : c.certDevice === 'MOBILE' ? ', en el móvil' : ''}.
 - Paso guardado del flujo: ${c.currentState} — ${STATE_MEANING[c.currentState] ?? 'paso interno del despacho.'}
 ${memory ? `- Memoria del expediente: ${memory.slice(0, 4000)}` : ''}
-Lo que el cliente haya dicho en la conversación vale más que estos datos si es más reciente.
+Lo que el cliente haya dicho en la conversación vale más que estos datos si es más reciente.${introduced ? '' : '\n- IMPORTANTE: este cliente todavía no ha recibido tu presentación (el primer mensaje no le llegó). Empieza tu respuesta presentándote: eres Dayana, la asistente virtual de LITIGIOS, y le escribes por el apoderamiento apud acta de su reclamación.'}
 
 ## Qué puedes hacer en este turno
 - RESPONDER: escribes tú el mensaje al cliente. Es lo normal.
 - SILENCIO: el cliente solo confirma o agradece algo y no hace falta contestar (por ejemplo, un
   segundo "vale" seguido). Úsalo poco.
-${stepLines ? `- Avanzar el flujo con uno de estos pasos, SOLO si el cliente acaba de dejarlo claro:\n${stepLines}` : '- Ahora no hay pasos del flujo disponibles: responde tú.'}
+${stepLines ? `- Avanzar el flujo con uno de estos pasos, SOLO si el mensaje del cliente responde sobre todo a
+  eso. Si pregunta o plantea otra cosa (que ya lo hizo, usar el certificado de otro, una duda),
+  RESPONDER a eso primero; el paso puede esperar al siguiente turno:\n${stepLines}` : '- Ahora no hay pasos del flujo disponibles: responde tú.'}
 - Además, en cualquier caso puedes pasar el caso a una persona con "traspaso".
 
 ## Formato de salida
