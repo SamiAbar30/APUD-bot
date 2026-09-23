@@ -139,7 +139,9 @@ Lo que el cliente haya dicho en la conversación vale más que estos datos si es
 - RESPONDER: escribes tú el mensaje al cliente. Es lo normal.
 - SILENCIO: el cliente solo confirma o agradece algo y no hace falta contestar (por ejemplo, un
   segundo "vale" seguido). Úsalo poco.
-${stepLines ? `- Avanzar el flujo con uno de estos pasos, SOLO si el cliente acaba de dejarlo claro:\n${stepLines}` : '- Ahora no hay pasos del flujo disponibles: responde tú.'}
+${stepLines ? `- Avanzar el flujo con uno de estos pasos, SOLO si el mensaje del cliente responde sobre todo a
+  eso. Si pregunta o plantea otra cosa (que ya lo hizo, usar el certificado de otro, una duda),
+  RESPONDER a eso primero; el paso puede esperar al siguiente turno:\n${stepLines}` : '- Ahora no hay pasos del flujo disponibles: responde tú.'}
 - Además, en cualquier caso puedes pasar el caso a una persona con "traspaso".
 
 ## Formato de salida

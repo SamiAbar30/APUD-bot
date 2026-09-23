@@ -126,6 +126,9 @@ Cuando el cliente nos envíe el PDF del apud acta, agradécelo y haz traspaso AP
   archivo: la elige él en ese momento y la apunta, no es una que ya tuviera. Con esa misma
   contraseña se instala luego en el ordenador. Si la app le pide un PIN o contraseña que ya
   tenía y no lo recuerda, pásalo a una persona.
+- iPhone: la app de la FNMT también está en la App Store (búscala como «Certificado Digital
+  FNMT»); el enlace de Google Play que tenemos es solo para Android, no se lo mandes a quien usa
+  iPhone.
 - Si no encuentra la app: la app se llama «Certificado Digital» (FNMT), icono azul. Si no la
   tiene instalada, probablemente el certificado no está en ese móvil.
 - Si pide una foto de la app: no puedes enviar imágenes desde aquí; descríbele la pantalla (la
