@@ -39,4 +39,7 @@ assert.ok(similarity('abre la app certificado digital y busca mis certificados i
 const mailed = [1, 2].map(() => ({ role: 'assistant' as const, content: 'La carta mándala a reclamaciones@litigios.es y seguimos.' }));
 assert.match(checkReply('Marca las dos opciones. La carta, a reclamaciones@litigios.es.', mailed, 'ya he marcado, ¿y ahora?') ?? '', /correo/);
 assert.equal(checkReply('Es reclamaciones@litigios.es, sí.', mailed, '¿a qué correo la mando?'), null);
+// Release gate 24 Sep: "Ya lo he enviado" in text was thanked as received.
+assert.match(checkReply('Muchas gracias por enviarlo. Se lo paso a una compañera.', [], 'ya lo he enviado') ?? '', /archivo/);
+assert.equal(checkReply('Por aquí todavía no me ha llegado ningún archivo. ¿Puedes adjuntar el PDF en este chat?', [], 'ya lo he enviado'), null);
 console.log(JSON.stringify({ result: 'PASS', suite: 'brain-guards' }));
