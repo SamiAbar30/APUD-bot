@@ -16,7 +16,7 @@ import {createHash} from 'node:crypto';
 import {PrismaClient} from '@prisma/client';
 import {conversationAiFromEnv} from '../../src/config/conversation-ai.js';
 import {PERSONAS,type Persona} from './personas.js';
-import {seedTrainingLines,resetLine,clearQueueFor,sendText,officeReplies} from './lines.js';
+import {seedTrainingLines,resetLine,clearQueueFor,sendText,officeReplies,tapButton,deliveryFailed,sentIds,buttonsOnScreen} from './lines.js';
 
 const arg=(name:string)=>process.argv.find(a=>a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
 const round=arg('round')??new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
@@ -66,17 +66,23 @@ async function corpusPersonas():Promise<Persona[]>{
     goal:'Lo que este cliente quería según sus mensajes.'}));
 }
 
-async function simulateClient(p:Persona,transcript:Line[]):Promise<{text:string;done:boolean;why:string}>{
-  if(transcript.filter(l=>l.who==='cliente').length===0&&p.openWith)return {text:p.openWith,done:false,why:''};
+type ClientMove={texts:string[];button?:string;done:boolean;why:string;text?:string};
+async function simulateClient(p:Persona,transcript:Line[],screen:{current:string[];older:string[]}):Promise<ClientMove>{
+  if(transcript.filter(l=>l.who==='cliente').length===0&&p.openWith)return {texts:[p.openWith],done:false,why:''};
   const out=await chatJson(SIM_MODEL,`Eres un cliente de un despacho de abogados español hablando por WhatsApp con su asistente virtual sobre el "apoderamiento apud acta" de tu reclamación. Juegas un papel; nunca reveles que eres una simulación.
 Tus hechos (solo los sabes tú, revélalos cuando sea natural): ${p.facts}
 Tu forma de ser y escribir: ${p.behaviour}
 Lo que quieres conseguir: ${p.goal}
 Reglas: escribe como en WhatsApp real, normalmente una o dos frases cortas, en español salvo que tu papel diga otra cosa. Reacciona a lo que te acaban de decir: si te dan un paso, lo intentas y cuentas qué pasa según tus hechos. Si te repiten lo mismo o no te entienden, muestra frustración como lo haría una persona. No puedes enviar archivos ni imágenes; si tuvieras que mandar un archivo, di que lo mandas y termina.\nSi estás en la Sede Judicial, lo que ves en pantalla es lo de esta guía oficial; no inventes pantallas, campos ni datos que la Sede pida fuera de ella:\n${SEDE_SCREENS}
+Como en WhatsApp real: a veces partes lo que dices en varios mensajes cortos seguidos ("Vale" / "Dame un segundo" / "ya está"), y cuando el último mensaje trae botones a menudo contestas pulsando uno en vez de escribir. Muy de vez en cuando, por despiste, pulsas un botón de un mensaje anterior.
+Botones del último mensaje: ${screen.current.length?screen.current.join(' | '):'(ninguno)'}.
+Botones de mensajes anteriores: ${screen.older.length?screen.older.join(' | '):'(ninguno)'}.
 Termina ("fin": true) cuando: consigues tu objetivo, te dicen que te atiende una persona y ya no hay más que decir, te despides, o llevas varios mensajes sin avanzar y lo dejas.
-Devuelve SOLO JSON: {"mensaje":"tu próximo mensaje (vacío si fin)","fin":true|false,"motivo":"por qué terminas (si fin)"}`,
-    `Conversación hasta ahora:\n${show(transcript)}\n\nEscribe tu siguiente mensaje como el cliente.`);
-  return {text:String(out.mensaje??'').trim(),done:out.fin===true||!String(out.mensaje??'').trim(),why:String(out.motivo??'')};
+Devuelve SOLO JSON: {"mensajes":["uno o varios mensajes cortos que envías seguidos (vacío si pulsas un botón o si fin)"],"boton":"título exacto del botón que pulsas, o vacío","fin":true|false,"motivo":"por qué terminas (si fin)"}`,
+    `Conversación hasta ahora:\n${show(transcript)}\n\nEscribe tu siguiente movimiento como el cliente.`);
+  const texts=(Array.isArray(out.mensajes)?out.mensajes:[out.mensaje]).map(t=>String(t??'').trim()).filter(Boolean).slice(0,5);
+  const button=String(out.boton??'').trim()||undefined;
+  return {texts,...(button?{button}:{}),done:out.fin===true||(!texts.length&&!button),why:String(out.motivo??'')};
 }
 
 async function judge(p:Persona,transcript:Line[],finalState:string,document:string){
@@ -90,7 +96,7 @@ ${roster}
 ---
 Criterios de la revisión (1 a 5 cada uno):
 - comprension: entiende lo que el cliente quiere decir, no palabras sueltas.
-- sigue_el_punto: sabe en qué punto está el cliente y da el siguiente paso concreto desde ahí; no vuelve a preguntar lo ya dicho.
+- sigue_el_punto: sabe en qué punto está el cliente y da el siguiente paso concreto desde ahí; no vuelve a preguntar lo ya dicho (una respuesta con [botón] cuenta como dicha).
 - no_repite: no repite mensajes ni ideas que ya no funcionaron; cambia de enfoque.
 - respeta_decisiones: si el cliente dice que no comparte su certificado o que prefiere hacerlo él, lo respeta y le ayuda en eso.
 - exactitud: todo lo que dice cumple el manual (enlaces, precios, pasos, seguridad); no inventa nada.
@@ -106,6 +112,7 @@ function mechanicalProblems(transcript:Line[]):string[]{
   const problems:string[]=[];const seen=new Map<string,number>();
   transcript.forEach((l,i)=>{
     if(l.who!=='bot')return;
+    if(l.text==='(sin respuesta)'){problems.push(`L${i+1}: el bot no contesta y el caso no está con una persona`);return;}
     const key=l.text.toLowerCase().replace(/\s+/g,' ').trim();
     if(seen.has(key))problems.push(`L${i+1}: mensaje idéntico al de la línea ${seen.get(key)}`);else seen.set(key,i+1);
     if((l.text.match(/\?/g)?.length??0)>1)problems.push(`L${i+1}: más de una pregunta`);
@@ -126,6 +133,9 @@ const queue=[...personas];
 const free=[...lines];
 const retried=new Set<string>();
 
+/** Deterministic, so a rerun of a round refuses the same openings. */
+function refuseOpening(id:string){return createHash('sha256').update(seed+id).digest()[0]!%4===0;}
+
 async function run(p:Persona,line:typeof lines[number]):Promise<Result>{
   // The previous conversation on this line may still hold the case lock for a last reply.
   let opened:Awaited<ReturnType<typeof resetLine>>|null=null;
@@ -138,15 +148,26 @@ async function run(p:Persona,line:typeof lines[number]):Promise<Result>{
   if(!opened){await clearQueueFor([line.caseId]);opened=await resetLine(db,line.phone);}
   const {caseId,started}=opened;
   const opening=await officeReplies(db,caseId,new Date(started.getTime()-1),{firstWithinMs:60_000,settleMs:2_000});
-  const transcript:Line[]=opening.map(text=>({who:'bot' as const,text}));
+  // One conversation in four starts like the manager's live test: Meta refuses the opening, so the
+  // client never saw it and writes first.
+  const refused=refuseOpening(p.id);
+  if(refused){const [first]=await sentIds(db,caseId);if(first)await deliveryFailed(line.phone,first);await new Promise(r=>setTimeout(r,3000));}
+  const transcript:Line[]=refused?[{who:'bot',text:'(primer mensaje no entregado por WhatsApp: el cliente no lo vio)'}]:opening.map(text=>({who:'bot' as const,text}));
   let end='max_turns';
   const traces:string[]=[];
   for(let turn=0;turn<maxTurns;turn++){
-    const next=await simulateClient(p,transcript);
+    const screens=await buttonsOnScreen(db,caseId);
+    const lastSent=(await sentIds(db,caseId)).at(-1);
+    const current=screens.find(x=>x.messageId===lastSent);
+    const older=screens.filter(x=>x!==current);
+    const next=await simulateClient(p,transcript,{current:current?.buttons.map(b=>b.title)??[],older:[...new Set(older.flatMap(x=>x.buttons.map(b=>b.title)))]});
     if(next.done){end=`cliente: ${next.why}`;break;}
     const before=new Date();
-    await sendText(line.phone,next.text);
-    transcript.push({who:'cliente',text:next.text});
+    const pressed=next.button?[current,...[...older].reverse()].flatMap(x=>x?x.buttons.map(b=>({...b,messageId:x.messageId})):[]).find(b=>b.title.toLowerCase()===next.button!.toLowerCase()):undefined;
+    if(pressed){await tapButton(line.phone,pressed.id,pressed.title,pressed.messageId);transcript.push({who:'cliente',text:`[botón] ${pressed.title}${pressed.messageId!==current?.messageId?' (de un mensaje anterior)':''}`});}
+    for(const text of next.texts){await sendText(line.phone,text);transcript.push({who:'cliente',text});await new Promise(r=>setTimeout(r,150));}
+    if(!pressed&&!next.texts.length){end='cliente: botón inexistente';break;}
+    next.text=[pressed?.title,...next.texts].filter(Boolean).join(' / ');
     const replies=await officeReplies(db,caseId,before);
     const audits=await db.botApodAuditLog.findMany({where:{expedienteId:caseId,createdAt:{gt:before}},orderBy:{createdAt:'asc'},select:{event:true,fromState:true,toState:true,metadata:true}});
     traces.push(`T${turn+1} «${next.text.slice(0,60)}» → `+(audits.map(a=>{const e=((a.metadata as {evidence?:Record<string,unknown>}|null)?.evidence)??{};return `${a.event} ${a.fromState}→${a.toState}${e.brainUnderstanding?` | entiende: ${e.brainUnderstanding}`:''}${e.brainNote?` | nota: ${e.brainNote}`:''}${e.brainLead?' | con frase previa':''}`;}).join(' ; ')||'sin evento'));

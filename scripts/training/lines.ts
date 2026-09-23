@@ -102,3 +102,36 @@ export async function officeReplies(db:PrismaClient,caseId:string,after:Date,{fi
   }
   return rows.map(r=>r.content);
 }
+
+async function postWebhook(value:Record<string,unknown>){
+  const body=JSON.stringify({object:'whatsapp_business_account',entry:[{id:'wce-local-business',changes:[{field:'messages',value:{messaging_product:'whatsapp',metadata:{display_phone_number:'x',phone_number_id:'999000000000'},...value}}]}]});
+  const signature=`sha256=${createHmac('sha256',process.env.WA_APP_SECRET!).update(body).digest('hex')}`;
+  const response=await fetch(`${BASE}/webhooks/whatsapp`,{method:'POST',headers:{'content-type':'application/json','x-hub-signature-256':signature},body});
+  if(!response.ok)throw new Error(`WEBHOOK_${response.status}`);
+}
+
+/** A tap on a reply button, as WhatsApp sends it: id, title and the message it was under. */
+export const tapButton=(phone:string,id:string,title:string,contextId?:string)=>postWebhook({contacts:[{profile:{name:'Cliente'},wa_id:phone}],messages:[{from:phone,id:`wamid-btn-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,timestamp:String(Math.floor(Date.now()/1000)),type:'interactive',interactive:{type:'button_reply',button_reply:{id,title}},...(contextId?{context:{id:contextId}}:{})}]});
+
+/** Meta refusing a message, e.g. 131047 when the client has not written in the last 24 hours. */
+export const deliveryFailed=(phone:string,messageId:string,code=131047)=>postWebhook({statuses:[{id:messageId,recipient_id:phone,timestamp:String(Math.floor(Date.now()/1000)),status:'failed',errors:[{code,title:'refused'}]}]});
+
+/** WhatsApp ids of what the office actually sent on a case, oldest first. */
+export async function sentIds(db:PrismaClient,caseId:string){
+  const rows=await db.botApodAccion.findMany({where:{expedienteId:caseId,actionType:{in:['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA']},status:{in:['EXECUTED','AWAITING_DELIVERY']}},orderBy:{createdAt:'asc'},select:{receipt:true}});
+  return rows.map(r=>String((r.receipt as {messageId?:string}|null)?.messageId??'')).filter(Boolean);
+}
+
+/** Buttons the client can see, per sent message, oldest first: what a thumb could tap. */
+export async function buttonsOnScreen(db:PrismaClient,caseId:string){
+  const {messageForCase}=await import('../../src/core/messages.js');
+  const c=await db.botApodExpediente.findUniqueOrThrow({where:{id:caseId}});
+  const rows=await db.botApodAccion.findMany({where:{expedienteId:caseId,actionType:{in:['SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA']},status:{in:['EXECUTED','AWAITING_DELIVERY']}},orderBy:{createdAt:'asc'},select:{payload:true,receipt:true,createdAt:true}});
+  const out:Array<{messageId:string;createdAt:Date;buttons:Array<{id:string;title:string}>}>=[];
+  for(const r of rows){
+    const p=r.payload as {template?:string;variables?:Record<string,string>};const messageId=String((r.receipt as {messageId?:string}|null)?.messageId??'');
+    if(!p.template||!messageId)continue;
+    try{const g=messageForCase(c,process.env.CONSENT_VERSION,p.template as never,p.variables as never);if(g.buttons?.length)out.push({messageId,createdAt:r.createdAt,buttons:g.buttons.map(b=>({id:b.id,title:b.title}))});}catch{/* template needs data it no longer has */}
+  }
+  return out;
+}

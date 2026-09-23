@@ -83,7 +83,7 @@ export class WorkflowService {
     const nextVersion=c.version+(changed?1:0);
     const updated=await tx.botApodExpediente.updateMany({where:{id:c.id,version:c.version},data:{...combined,currentState:decision.nextStep as ApodState,version:nextVersion}});
     if(updated.count!==1)throw new AppError('CASE_CHANGED_RELOAD',409);
-      await tx.botApodAuditLog.create({data:{expedienteId:c.id,event:type,fromState:c.currentState,toState:decision.nextStep as ApodState,operator,metadata:json({decision,version:nextVersion,evidence:Object.fromEntries(Object.entries(payload).filter(([key])=>['evidenceRef','clientEvidenceRef','paymentEvidenceRef','operatorId','requestActionId','contextId','messageId','messageSha256','conversationOption','conversationConfidence','conversationClassification','conversationReviewReason','conversationResponseId','conversationRolloutPhase','conversationRolloutKind','responseId','rolloutPhase','rolloutKind','sha256','documentId','reviewedDraftId','reviewedDraftSha256','brainUnderstanding','brainProgress','brainNote','brainLead','silent'].includes(key)))})}});
+      await tx.botApodAuditLog.create({data:{expedienteId:c.id,event:type,fromState:c.currentState,toState:decision.nextStep as ApodState,operator,metadata:json({decision,version:nextVersion,evidence:Object.fromEntries(Object.entries(payload).filter(([key])=>['evidenceRef','clientEvidenceRef','paymentEvidenceRef','operatorId','requestActionId','contextId','messageId','messageSha256','conversationOption','conversationConfidence','conversationClassification','conversationReviewReason','conversationResponseId','conversationRolloutPhase','conversationRolloutKind','responseId','rolloutPhase','rolloutKind','sha256','documentId','reviewedDraftId','reviewedDraftSha256','brainUnderstanding','brainProgress','brainNote','brainLead','brainFactCert','brainFactDevice','silent'].includes(key)))})}});
     if(decision.actionRequired!=='NO_OP')await tx.botApodAccion.create({data:{expedienteId:c.id,decisionId:decision.decisionId,expectedVersion:nextVersion,actionType:decision.actionRequired,payload:json({...decision.actionPayload,contextStep:combined.stepReached??c.stepReached,...(payload.requiresHumanReview===true?{humanHandoff:true,handoffReason:payload.handoffReason??'HUMANO'}:{})}),idempotencyKey:`apod-${decision.decisionId}`,status:decision.actionRequired==='ESCALATE_HUMAN'?'HUMAN_REQUIRED':'PENDING'}});
     if(decision.actionPayload.kind==='ESCALATE_HUMAN'&&type!==EventType.CLIENT_OPT_OUT&&!c.optOutAt&&decision.actionPayload.clientNoticeTemplate)await tx.botApodAccion.create({data:{expedienteId:c.id,decisionId:randomUUID(),expectedVersion:nextVersion,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({template:payload.requiresHumanReview===true?'CONVERSATION_REPLY':'HUMAN_HANDOFF_NOTICE',...(payload.requiresHumanReview===true?{variables:{replyText:payload.responseText},contextStep:c.stepReached}:{}),parentDecisionId:decision.decisionId,humanHandoff:true,handoffReason:payload.handoffReason??'HUMANO'}),idempotencyKey:`handoff-${decision.decisionId}`}});
     if(type===EventType.OPERATOR_SUBMISSION_CONFIRMED)await tx.botApodHumanTask.updateMany({where:{expedienteId:c.id,kind:'ASSISTED_PROCESSING',status:'OPEN'},data:{status:'RESOLVED',resolvedAt:new Date(),resolvedBy:operator,resolutionRef:String(payload.evidenceRef)}});
@@ -318,7 +318,16 @@ export class WorkflowService {
             const newer=await tx.botApodInbox.count({where:{expedienteId:id,status:'PENDING',id:{notIn:turnIds},OR:[{notBefore:{gt:new Date()}},{createdAt:{gt:snapshotAt}}]}});
             if(newer)return;
           }
-          await this.transition(tx,c,eventType,eventPayload,{},'WHATSAPP_CLIENT');
+          // Facts the client stated in a turn the brain answered in words: keep the case in step
+          // with the conversation, so later steps (such as the office route) are offered.
+          const stated:WorkflowPatch={};
+          if(eventType===E.smallTalk){
+            if(eventPayload.brainFactCert==='si')stated.hasDigitalCert=true;
+            if(eventPayload.brainFactCert==='no'){stated.hasDigitalCert=false;stated.certDevice='NONE';}
+            if(eventPayload.brainFactDevice==='movil'){stated.hasDigitalCert=true;stated.certDevice='MOBILE';}
+            if(eventPayload.brainFactDevice==='ordenador'){stated.hasDigitalCert=true;stated.certDevice='PC';}
+          }
+          await this.transition(tx,c,eventType,eventPayload,stated,'WHATSAPP_CLIENT');
           const payload=eventPayload;
           const needsHumanReview=payload.requiresHumanReview===true;
           await tx.botApodInbox.updateMany({where:{id:{in:turnIds},status:'PENDING'},data:{status:needsHumanReview?'HUMAN_REQUIRED':'PROCESSED',lastError:needsHumanReview?'CLIENT_MESSAGE_REQUIRES_OPERATOR_REVIEW':null,processedAt:new Date()}});

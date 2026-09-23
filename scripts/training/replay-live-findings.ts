@@ -6,27 +6,15 @@
  * Usage: ENV_FILE=.env.wce npx tsx scripts/training/replay-live-findings.ts
  */
 import '../../src/config/load-env-file.js';
-import {createHmac} from 'node:crypto';
 import {PrismaClient} from '@prisma/client';
-import {BASE,seedTrainingLines,resetLine,clearQueueFor,sendText,officeReplies} from './lines.js';
+import {seedTrainingLines,resetLine,clearQueueFor,sendText,officeReplies,tapButton,deliveryFailed,sentIds as sentIdsOf} from './lines.js';
 
 const db=new PrismaClient();
 const checks:Array<{finding:string;pass:boolean;detail:string}>=[];
 const check=(finding:string,pass:boolean,detail='')=>{checks.push({finding,pass,detail});console.log(`${pass?'PASS':'FAIL'} ${finding}${detail?` — ${detail}`:''}`);};
 const sleep=(ms:number)=>new Promise(r=>setTimeout(r,ms));
 
-async function post(value:Record<string,unknown>){
-  const body=JSON.stringify({object:'whatsapp_business_account',entry:[{id:'wce-local-business',changes:[{field:'messages',value:{messaging_product:'whatsapp',metadata:{display_phone_number:'x',phone_number_id:'999000000000'},...value}}]}]});
-  const signature=`sha256=${createHmac('sha256',process.env.WA_APP_SECRET!).update(body).digest('hex')}`;
-  const response=await fetch(`${BASE}/webhooks/whatsapp`,{method:'POST',headers:{'content-type':'application/json','x-hub-signature-256':signature},body});
-  if(!response.ok)throw new Error(`WEBHOOK_${response.status}`);
-}
-const tapButton=(phone:string,id:string,title:string,contextId?:string)=>post({contacts:[{profile:{name:'Cliente'},wa_id:phone}],messages:[{from:phone,id:`wamid-btn-${Date.now()}-${Math.random().toString(36).slice(2,7)}`,timestamp:String(Math.floor(Date.now()/1000)),type:'interactive',interactive:{type:'button_reply',button_reply:{id,title}},...(contextId?{context:{id:contextId}}:{})}]});
-const deliveryFailed=(phone:string,messageId:string)=>post({statuses:[{id:messageId,recipient_id:phone,timestamp:String(Math.floor(Date.now()/1000)),status:'failed',errors:[{code:131047,title:'Re-engagement message'}]}]});
-async function sentIds(caseId:string){
-  const rows=await db.botApodAccion.findMany({where:{expedienteId:caseId,actionType:{in:['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA']},status:{in:['EXECUTED','AWAITING_DELIVERY']}},orderBy:{createdAt:'asc'},select:{receipt:true}});
-  return rows.map(r=>String((r.receipt as {messageId?:string}|null)?.messageId??'')).filter(Boolean);
-}
+const sentIds=(caseId:string)=>sentIdsOf(db,caseId);
 const state=async(caseId:string)=>db.botApodExpediente.findUniqueOrThrow({where:{id:caseId},select:{currentState:true,hasDigitalCert:true,automationPaused:true}});
 const transcript:string[]=[];
 async function say(phone:string,caseId:string,texts:string[]){
