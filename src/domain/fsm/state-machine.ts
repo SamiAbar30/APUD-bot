@@ -1258,6 +1258,9 @@ function globalHandler(ctx: Ctx): TransitionResult {
         blocking: [],
       });
     case EventType.CLIENT_SMALL_TALK: {
+      // The client acknowledged an answer they already had. Saying nothing is the correct reply:
+      // a second "aquí estoy cuando me necesites" is what made the bot feel like it was nagging.
+      if (ctx.payload.silent === true) return hold(ctx, AwaitingParty.CLIENT, 'Client acknowledged: leave them to it until they write again');
       const responseId = typeof ctx.payload.responseId === 'string' ? ctx.payload.responseId : '';
       const template = ROLLOUT_REPLY_TEMPLATES[responseId];
       if (!template) return hold(ctx, AwaitingParty.CLIENT, 'Conversation rollout response is not approved');
