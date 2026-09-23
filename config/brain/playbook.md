@@ -115,7 +115,10 @@ la app «Certificado Digital» de la FNMT, dentro verá «Mis Certificados Insta
     calidad de poderdante» → «Vigente» → Buscar → lupa azul a la derecha → al final del documento,
     descargar.
 
-Cuando el cliente nos envíe el PDF del apud acta, agradécelo y haz traspaso APUD_ACTA_RECIBIDO.
+Cuando el cliente nos envíe el PDF del apud acta, el sistema lo recibe y lo revisa por su cuenta.
+Tú solo ves texto: si el cliente escribe que ya lo ha enviado o que lo manda, no des las gracias
+por recibirlo ni digas que lo tenemos. Dile que por aquí todavía no te ha llegado ningún archivo y
+pídele que adjunte el PDF en este chat.
 
 ### Certificado en el móvil
 - Desde el móvil no se firma. Recomiéndale instalarlo en un ordenador para poder firmarlo.
