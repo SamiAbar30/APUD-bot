@@ -160,7 +160,7 @@ function toTurn(d: Record<string, unknown>, steps: Map<string, { event: EventTyp
   const step = steps.get(action);
   let lead = cleanText(String(d.mensaje ?? ''));
   // A lead that says what the step's message is about to say is the same thing twice.
-  if (step && lead && similarity(normalize(lead), normalize((step as { preview?: string }).preview ?? '')) > 0.35) lead = '';
+  if (step && lead && echoes(normalize(lead), normalize((step as { preview?: string }).preview ?? ''))) lead = '';
   if (step && !handoff) return { type: step.event, payload: { ...step.payload, ...trace, ...(lead ? { brainLead: lead } : {}) } };
   if (action === 'SILENCIO' && !handoff)
     return { type: EventType.CLIENT_SMALL_TALK, payload: { responseId: 'CONVERSATION_REPLY', rolloutPhase: 3, rolloutKind: 'WORKFLOW_REQUEST', silent: true, requiresHumanReview: false, ...trace } };
@@ -247,6 +247,15 @@ function cleanText(text: string): string {
 
 function normalize(text: string): string {
   return text.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9@.€:/ ]/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+/** True when a lead repeats the step's message: broad overlap, or any shared four-word phrase. */
+function echoes(lead: string, preview: string): boolean {
+  if (!preview) return false;
+  if (similarity(lead, preview) > 0.35) return true;
+  const words = lead.split(' ');
+  for (let i = 0; i + 4 <= words.length; i++) if (preview.includes(words.slice(i, i + 4).join(' '))) return true;
+  return false;
 }
 
 /** Word-overlap between two messages; 1 means the same words. */
