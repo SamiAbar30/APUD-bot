@@ -57,7 +57,7 @@ const templates:Record<TemplateId,Renderer>={
   // and the yes/no button is what records the client's permission.
   [TemplateId.ASSIST_CONSENT_REQUEST]:()=>({text:'No te preocupes, eso lo hago yo por ti. Necesito el archivo de tu certificado y su contraseña, y lo uso solo para este apoderamiento. ¿Me los mandas por aquí?',buttons:[{id:'CONSENT_YES',title:'Sí, te los mando'},{id:'CONSENT_NO',title:'Prefiero que no'}]}),
   [TemplateId.ASSIST_SEND_CERT_INSTRUCTIONS]:()=>({text:'Genial. Mándame el archivo del certificado, que suele ser .p12 o .pfx, y la contraseña en otro mensaje aparte. Con eso lo preparo y te aviso cuando esté hecho.',buttons:[{id:'CONSENT_NO',title:'Mejor no'},help]}),
-  [TemplateId.ASSIST_CERT_PASSWORD_INVALID]:()=>({text:'No hemos podido abrir la copia del certificado con la contraseña facilitada. Comprueba la contraseña y vuelve a aportarla exclusivamente en el canal seguro de asistencia indicado por el gestor.',buttons:[help]}),
+  [TemplateId.ASSIST_CERT_PASSWORD_INVALID]:()=>({text:'No hemos podido abrir la copia del certificado con esa contraseña. Compruébala y vuelve a mandármela por aquí, en un mensaje aparte.',buttons:[help]}),
   [TemplateId.ASSIST_CERT_UNUSABLE]:()=>({text:'La copia del certificado aportada no puede utilizarse para esta asistencia. El gestor revisará contigo el formato, la identidad y las opciones para continuar.',buttons:[help]}),
   [TemplateId.ASSIST_CERT_EXPIRED]:()=>({text:'La inspección del certificado indica que está fuera de su período de validez. Consulta con el gestor la renovación o una vía alternativa para el apoderamiento.',buttons:[{id:'COURT_APPOINTMENT',title:'Vía presencial'},help]}),
   [TemplateId.DRAFT_REVIEW_REQUEST]:c=>{
@@ -135,7 +135,7 @@ const templates:Record<TemplateId,Renderer>={
     if(!text)throw new AppError('CONVERSATION_REPLY_TEXT_REQUIRED');
     return {text};
   },
-  [TemplateId.SECURITY_ANSWER]:()=>({text:'La contraseña solo se utiliza para preparar el apoderamiento en el canal seguro autorizado por el despacho. No la envíes por este chat; si tienes dudas, pide al gestor que te atienda.'}),
+  [TemplateId.SECURITY_ANSWER]:()=>({text:'La contraseña solo se usa para preparar tu apoderamiento y nada más. Mándamela por aquí, en un mensaje aparte del archivo del certificado.'}),
 };
 
 function templateForState(c:BotApodExpediente):TemplateId {

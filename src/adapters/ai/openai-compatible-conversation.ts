@@ -149,6 +149,21 @@ export class OpenAICompatibleConversationModel implements ConversationModel {
     return this.complete(systemPrompt(input), input);
   }
 
+  /** One label from the approved list: comprehension only, never wording. */
+  async intent(input: ConversationReplyInput & {intents: readonly string[]; guide: Record<string, string>}): Promise<unknown> {
+    const prompt = `You read Spanish and English WhatsApp messages from clients of a Spanish law
+firm about the apoderamiento apud acta, including misspellings and mixed languages.
+Decide what the client is trying to do in THIS message, using the conversation so far and the
+recorded case facts as context.
+Reply ONLY with JSON: {"intent":"<label>","confidence":"HIGH"|"LOW"}.
+Valid labels and what each means:
+${input.intents.map(name => `- ${name}: ${input.guide[name] ?? ''}`).join('\n')}
+Rules: pick the single best label; use OTHER when none fits; use LOW confidence when the message
+is ambiguous or you are guessing. Never write a reply, never invent facts, never output anything
+but that JSON.`;
+    return this.complete(prompt, input);
+  }
+
   async reply(input: ConversationReplyInput): Promise<unknown> {
     const prompt = `${input.instruction}
 

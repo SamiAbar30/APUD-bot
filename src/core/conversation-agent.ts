@@ -6,6 +6,7 @@ const OPTION_EVENT_HAS_CERT=Events.CLIENT_HAS_CERT;
 import { officialLinks } from './guides.js';
 import { outsideWorkflowTopic, outsideTopicReply, wroteAndWaits, sentUsSomething, WAITING_FOR_REPLY, RECEIVED_IT } from './topic-routing.js';
 import { completeReply } from './compound-reply.js';
+import { CONVERSATION_INTENTS, CONVERSATION_INTENT_GUIDE, replyForIntent, type ConversationIntent } from './conversation-intent.js';
 import { DIGITAL_GUIDANCE_STATES, conversationYield, declaredDocumentType, guidanceRequest, isConversationQuestion, reviewedConversationReply, type CaseContext } from './conversation-guidance.js';
 import {
   allowedConversationOptions,
@@ -50,6 +51,18 @@ export interface ConversationModel {
     history?: readonly ConversationHistoryMessage[];
     helpProgress?: {digitalAttempts:number;certificateAttempts:number};
     caseMemory?: string;
+  }): Promise<unknown>;
+  /** Reads meaning from the conversation and returns one approved intent label. */
+  intent?(input: {
+    phase: ConversationPhase;
+    instruction: string;
+    state: string;
+    hasDigitalCert: boolean | null;
+    text: string;
+    history?: readonly ConversationHistoryMessage[];
+    caseMemory?: string;
+    intents: readonly string[];
+    guide: Record<string, string>;
   }): Promise<unknown>;
 }
 
@@ -205,6 +218,37 @@ export class StrictConversationAgent {
     return guidanceDocumentType?{...result,payload:{...result.payload,guidanceDocumentType}}:result;
   }
 
+  /**
+   * What the client means, read from the conversation. Only a confident label from the approved
+   * list is accepted; anything else leaves the turn to the workflow rather than to a guess.
+   */
+  private async readIntent(
+    expediente: CaseContext,
+    text: string,
+    history: readonly ConversationHistoryMessage[],
+    memory: string | undefined,
+  ): Promise<ConversationIntent | null> {
+    if (!this.model?.intent) return null;
+    try {
+      const proposed = await this.model.intent({
+        phase: this.phase,
+        instruction: rolloutInstruction(this.phase),
+        state: String(expediente.currentState),
+        hasDigitalCert: expediente.hasDigitalCert,
+        text,
+        history: boundedConversationHistory(history),
+        ...(memory ? { caseMemory: memory } : {}),
+        intents: CONVERSATION_INTENTS,
+        guide: CONVERSATION_INTENT_GUIDE,
+      }) as { intent?: unknown; confidence?: unknown } | null;
+      const label = typeof proposed?.intent === 'string' ? proposed.intent : '';
+      const confident = proposed?.confidence !== 'LOW';
+      return confident && (CONVERSATION_INTENTS as readonly string[]).includes(label) ? label as ConversationIntent : null;
+    } catch {
+      return null;
+    }
+  }
+
   private async decideTurn(expediente:CaseContext,text:string,history:readonly ConversationHistoryMessage[],introduced:boolean,memory:string|undefined=this.memory):Promise<{type:EventType;payload:Record<string,unknown>}>{
     const n=text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase();
     let reply:ConversationReply|undefined;
@@ -269,6 +313,10 @@ export class StrictConversationAgent {
     // Availability is an answer, not noise: acknowledge it without promising a time.
     if(!reply&&/estoy trabajando|trabajo de \d|de \d{1,2} a \d{1,2}|manana por la manana|por la tarde|a partir de las|cuando salga de trabajar|el fin de semana/.test(n))
       reply={text:`Perfecto, lo hacemos cuando te venga bien, no hay prisa. ${expediente.hasDigitalCert===true?'Cuando estés delante del ordenador entramos en la Sede Judicial y firmamos el apoderamiento.':'Cuando tengas un rato tranquilo seguimos con el certificado digital.'}`,requiresHumanReview:false};
+    if(!reply&&/donde (?:te |le |la |lo |se )?(?:la |lo )?(?:envio|mando|paso|pongo|tengo que enviar|voy a enviar)|a donde (?:la |lo )?(?:envio|mando)|where do i send|donde os la mando/.test(n)&&/contrase|clave|certificad|password|archivo/.test(n))
+      reply={text:'Aquí mismo, por este chat. Mándame el archivo del certificado y, en un mensaje aparte, su contraseña; con eso lo preparo yo.',requiresHumanReview:false};
+    if(!reply&&/do i (?:have to|need to|should i)? ?send|shall i send|te lo (?:envio|mando|paso) (?:ahora|ya)|se lo (?:envio|mando)|lo envio ahora|i send it t+o? you/.test(n)&&!/no (?:lo )?tengo/.test(n))
+      reply={text:'Sí, mándamelo ahora por aquí y la contraseña en otro mensaje. Con eso me encargo yo del apoderamiento.',requiresHumanReview:false};
     // Someone telling you about a death, an illness or a child is not asking for the next step.
     // The model answers these with the tutorial, so the office answers them here instead.
     if(!reply&&/me recuperare|lo estoy pasando|estoy fatal|estoy sol|no puedo mas|me han despedido|me voy a ver a mi hijo|desbastado|destrozad|mi hijo esta|mi madre esta|mi padre esta/.test(n)&&!/\?/.test(text))
@@ -293,7 +341,7 @@ export class StrictConversationAgent {
     if(!reply&&/lo (?:habia|avia|hab[ií]a) (?:hecho|echo)|ya lo hice (?:por telefono|con)|con una companera|con un companero|por telefono con/.test(n))
       reply={text:'Perfecto, lo compruebo con el despacho y te confirmo por aquí si ya consta hecho. Si faltara algo, te lo digo y lo terminamos sin que tengas que repetir nada.',requiresHumanReview:true,handoffReason:'FALTA_DATO'};
     // They tell us when it will be done: take note, do not repeat the instructions now.
-    if(!reply&&/no puedo responder|no puedo atender|luego te contesto|ahora no puedo|manana (?:mismo|lo|la|te|os|se)|lo tiene manana|en cuanto (?:pueda|salga|llegue|termine)|por el trabajo|estoy en el trabajo|si no iria ahora/.test(n))
+    if(!reply&&/not now|not right now|later|in a bit|no puedo responder|no puedo atender|luego te contesto|ahora no puedo|ahora no|mas tarde|luego lo hago|manana (?:mismo|lo|la|te|os|se)|lo tiene manana|en cuanto (?:pueda|salga|llegue|termine)|por el trabajo|estoy en el trabajo|si no iria ahora/.test(n))
       reply={text:'Perfecto, sin prisa. Lo dejo apuntado y cuando lo tengas seguimos por aquí desde donde lo dejamos.',requiresHumanReview:false};
     // They received a letter from the lender and plan to ignore it: confirm who answers what.
     if(!reply&&/procedo a ignorar|los ignoro|les ignoro|no les contesto|no les hago caso/.test(n))
@@ -396,12 +444,16 @@ export class StrictConversationAgent {
     if(!reply&&/estafa|timo|fraude|es seguro|es fiable|no me fio|me fio|scam|suplanta/.test(n))reply={text:/contrase|certificad/.test(n)
       ?`Tranquilo, y gracias por la confianza. Mándame el archivo del certificado y, en otro mensaje, su contraseña, y yo hago el apoderamiento; nunca te pediremos dinero ni datos bancarios por aquí.`
       :`Entiendo la duda: puedes confirmar este mensaje con la oficina por un contacto que ya conozcas. El apoderamiento por tu cuenta es gratuito en la Sede Judicial (${officialLinks.sede}) y nunca te pediremos datos bancarios ni dinero. Si lo prefieres, lo tramitamos nosotros y tú no tienes que hacer nada.`,requiresHumanReview:false};
-    const copyLocated=/i (?:have|found) it|already have it|got it now|ya (?:lo |la )?(?:tengo|tenia|encontre|he encontrado|localice|he localizado)|lo tengo (?:localizado|descargado|guardado|aqui)|ya (?:esta|lo tengo) (?:descargado|localizado|guardado)|esta descargado|estaba en (?:mis |la |el )?(?:documentos|carpeta|descargas|archivos)|lo (?:encontre|he encontrado)|descargado en (?:mi|el) movil|i (?:have|found) (?:the file|the copy)/.test(n);
+    const copyLocated=/i (?:have|found|got) (?:it|the certificat\w*|my certificat\w*)|already have it|got it now|i(?:'| )?ll send it|i send it to you|i will send (?:it|you)|te lo (?:envio|mando|paso) ahora|voy a (?:enviartelo|mandartelo)|ya (?:lo |la )?(?:tengo|tenia|encontre|he encontrado|localice|he localizado)|lo tengo (?:localizado|descargado|guardado|aqui)|ya (?:esta|lo tengo) (?:descargado|localizado|guardado)|esta descargado|estaba en (?:mis |la |el )?(?:documentos|carpeta|descargas|archivos)|lo (?:encontre|he encontrado)|descargado en (?:mi|el) movil|i (?:have|found) (?:the file|the copy)/.test(n);
     if(!reply&&(expediente.certificateHelpAttempts??0)>0&&(copyLocated||expediente.certificateHelpAttempts===2&&/^(?:si|yes)[.!\s]*$/.test(n)))
       return {type:EventType.CLIENT_REQUESTS_ASSISTANCE,payload:{copyLocated:true}};
     if(!reply&&(expediente.certificateHelpAttempts??0)>0){
       if(/^(?:en (?:el |mi )?|on (?:my |the )?)?(?:movil|mobile|phone|ordenador|pc)[.!\s]*$/.test(n))return {type:EventType.CLIENT_REQUESTS_ASSISTANCE,payload:{helpTopic:/movil|mobile|phone/.test(n)?'COPY_MOBILE':'COPY_PC'}};
       if(/^(?:no|nope)[.!\s]*$/.test(n))return {type:EventType.CLIENT_EXPORT_FAILED,payload:{}};
+    }
+    if(!reply&&this.phase===3){
+      const intent=await this.readIntent(expediente,text,history,memory);
+      if(intent)reply=replyForIntent(intent,expediente)??undefined;
     }
     if(!reply)reply=yielded;
     if(!reply&&this.phase===3){const guidance=guidanceRequest(expediente,text);if(guidance)return guidance;}
@@ -418,6 +470,15 @@ export class StrictConversationAgent {
     if(reply)reply={...reply,text:completeReply(text,reply.text,expediente.hasDigitalCert)};
     const candidate=reply?flatten(reply.text):'';
     const repeated=Boolean(previous&&candidate&&(previous===candidate||previous.includes(candidate)||candidate.includes(previous)));
+    // "Vale" twice means the client is leaving it for later, not asking for alternatives. The
+    // office answers the first one and then lets them go; anything else reads as nagging, and the
+    // apology itself was being repeated too (live test 22 Sep).
+    const bareAck=(value:string)=>/^(?:vale+|ok|okey|okay|de acuerdo|bien|entendido|perfecto|gracias|genial)[.! ]*$/
+      .test(value.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim());
+    const previousClientTurn=[...history].reverse().find(m=>m.role==='user')?.content??'';
+    const acknowledgedAlready=bareAck(text)&&bareAck(previousClientTurn);
+    if(acknowledgedAlready)
+      return {type:EventType.CLIENT_SMALL_TALK,payload:{responseId:'CONVERSATION_REPLY',rolloutPhase:this.phase,rolloutKind:'WORKFLOW_REQUEST',silent:true,requiresHumanReview:false}};
     if(reply&&repeated){
       reply={text:'Perdona la insistencia. Si no puedes seguir desde el móvil, podemos hacerlo de otra forma: presencialmente en el juzgado, que es gratis, o lo tramita por ti la empresa colaboradora. ¿Cuál prefieres?',requiresHumanReview:false};
     }

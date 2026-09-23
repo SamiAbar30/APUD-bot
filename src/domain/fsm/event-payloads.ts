@@ -153,8 +153,9 @@ export const EVENT_PAYLOAD_SCHEMAS: Readonly<Record<EventType, z.ZodTypeAny>> = 
     rolloutKind: z.enum(['GREETING', 'PERSONAL_INFO', 'SECURITY_QUESTION', 'HELP_REQUEST', 'WORKFLOW_REQUEST', 'UNSUPPORTED']),
     responseText: z.string().trim().min(1).max(1600).optional(),
     requiresHumanReview: z.boolean().optional(),
+    silent: z.boolean().optional(),
   }).passthrough().superRefine((value, ctx) => {
-    if (value.responseId === 'CONVERSATION_REPLY' && !value.responseText) {
+    if (value.responseId === 'CONVERSATION_REPLY' && !value.responseText && value.silent !== true) {
       ctx.addIssue({ code: 'custom', path: ['responseText'], message: 'responseText required for CONVERSATION_REPLY' });
     }
   }),
