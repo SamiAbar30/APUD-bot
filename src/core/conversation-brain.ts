@@ -143,8 +143,11 @@ Lo que el cliente haya dicho en la conversación vale más que estos datos si es
 - SILENCIO: el cliente solo confirma o agradece algo y no hace falta contestar (por ejemplo, un
   segundo "vale" seguido). Úsalo poco.
 ${stepLines ? `- Avanzar el flujo con uno de estos pasos, SOLO si el mensaje del cliente responde sobre todo a
-  eso. Si pregunta o plantea otra cosa (que ya lo hizo, usar el certificado de otro, una duda),
-  RESPONDER a eso primero; el paso puede esperar al siguiente turno:\n${stepLines}` : '- Ahora no hay pasos del flujo disponibles: responde tú.'}
+  eso. Si además pregunta algo, contéstalo en "mensaje", que va delante del mensaje del paso. No
+  tomes un paso cuyo mensaje pregunte algo que el cliente ya ha contestado (por ejemplo, si ya dijo
+  que no tiene ordenador, no elijas un paso que pregunte si tiene ordenador): entonces RESPONDER.
+  Si el mensaje no da ese dato (dice que ya lo hizo, quiere usar el certificado de otro, una duda),
+  RESPONDER:\n${stepLines}` : '- Ahora no hay pasos del flujo disponibles: responde tú.'}
 - Además, en cualquier caso puedes pasar el caso a una persona con "traspaso".
 
 ## Formato de salida
@@ -153,7 +156,11 @@ Devuelve SOLO un objeto JSON:
  "punto":"en qué punto del trámite está el cliente según toda la conversación",
  "accion":"RESPONDER" | "SILENCIO" | "<uno de los pasos listados>",
  "mensaje":"con RESPONDER, tu mensaje al cliente. Con un paso, opcional: una o dos frases que van DELANTE del mensaje del sistema, para responder antes a lo que el cliente preguntó (no repitas lo que ya dice el mensaje del sistema). Vacío con SILENCIO.",
- "traspaso":null | ${HANDOFF_REASONS.map(r => `"${r}"`).join(' | ')}}
+ "traspaso":null | ${HANDOFF_REASONS.map(r => `"${r}"`).join(' | ')},
+ "datos":{"certificado":"si"|"no"|"?","dispositivo":"movil"|"ordenador"|"?"}}
+En "datos" pon lo que el cliente ha dicho de sí mismo en la conversación (tiene o no certificado, y
+si lo tiene en el móvil o en el ordenador); "?" si no lo ha dicho. El sistema lo guarda en el
+expediente aunque respondas tú, para no volver a preguntarlo.
 Si pones traspaso, "mensaje" es lo último que le dices antes de que le atienda una persona.`;
   }
 }
@@ -168,9 +175,21 @@ function toTurn(d: Record<string, unknown>, steps: Map<string, { event: EventTyp
   if (step && lead && echoes(normalize(lead), normalize((step as { preview?: string }).preview ?? ''))) lead = '';
   if (step && !handoff) return { type: step.event, payload: { ...step.payload, ...trace, ...(lead ? { brainLead: lead } : {}) } };
   if (action === 'SILENCIO' && !handoff)
-    return { type: EventType.CLIENT_SMALL_TALK, payload: { responseId: 'CONVERSATION_REPLY', rolloutPhase: 3, rolloutKind: 'WORKFLOW_REQUEST', silent: true, requiresHumanReview: false, ...trace } };
+    return { type: EventType.CLIENT_SMALL_TALK, payload: { responseId: 'CONVERSATION_REPLY', rolloutPhase: 3, rolloutKind: 'WORKFLOW_REQUEST', silent: true, requiresHumanReview: false, ...trace, ...statedFacts(d.datos) } };
   const turn = reply(cleanText(String(d.mensaje ?? '')), handoff, '');
-  return { ...turn, payload: { ...turn.payload, ...trace } };
+  return { ...turn, payload: { ...turn.payload, ...trace, ...statedFacts(d.datos) } };
+}
+
+/**
+ * What the client said about their certificate, so the case record keeps up with the conversation
+ * when the brain answers in its own words (training round 9: "tengo certificado en el móvil, no
+ * tengo ordenador" said in text left the case at "do you have a certificate?").
+ */
+function statedFacts(raw: unknown): Record<string, string> {
+  const d = raw && typeof raw === 'object' ? raw as Record<string, unknown> : {};
+  const cert = d.certificado === 'si' || d.certificado === 'no' ? d.certificado : undefined;
+  const device = d.dispositivo === 'movil' || d.dispositivo === 'ordenador' ? d.dispositivo : undefined;
+  return { ...(cert ? { brainFactCert: cert } : {}), ...(device && cert !== 'no' ? { brainFactDevice: device } : {}) };
 }
 
 function reply(text: string, handoff: string | null, note: string): BrainTurn {

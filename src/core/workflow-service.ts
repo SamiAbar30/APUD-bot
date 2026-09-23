@@ -83,7 +83,7 @@ export class WorkflowService {
     const nextVersion=c.version+(changed?1:0);
     const updated=await tx.botApodExpediente.updateMany({where:{id:c.id,version:c.version},data:{...combined,currentState:decision.nextStep as ApodState,version:nextVersion}});
     if(updated.count!==1)throw new AppError('CASE_CHANGED_RELOAD',409);
-      await tx.botApodAuditLog.create({data:{expedienteId:c.id,event:type,fromState:c.currentState,toState:decision.nextStep as ApodState,operator,metadata:json({decision,version:nextVersion,evidence:Object.fromEntries(Object.entries(payload).filter(([key])=>['evidenceRef','clientEvidenceRef','paymentEvidenceRef','operatorId','requestActionId','contextId','messageId','messageSha256','conversationOption','conversationConfidence','conversationClassification','conversationReviewReason','conversationResponseId','conversationRolloutPhase','conversationRolloutKind','responseId','rolloutPhase','rolloutKind','sha256','documentId','reviewedDraftId','reviewedDraftSha256','brainUnderstanding','brainProgress','brainNote','brainLead','silent'].includes(key)))})}});
+      await tx.botApodAuditLog.create({data:{expedienteId:c.id,event:type,fromState:c.currentState,toState:decision.nextStep as ApodState,operator,metadata:json({decision,version:nextVersion,evidence:Object.fromEntries(Object.entries(payload).filter(([key])=>['evidenceRef','clientEvidenceRef','paymentEvidenceRef','operatorId','requestActionId','contextId','messageId','messageSha256','conversationOption','conversationConfidence','conversationClassification','conversationReviewReason','conversationResponseId','conversationRolloutPhase','conversationRolloutKind','responseId','rolloutPhase','rolloutKind','sha256','documentId','reviewedDraftId','reviewedDraftSha256','brainUnderstanding','brainProgress','brainNote','brainLead','brainFactCert','brainFactDevice','silent'].includes(key)))})}});
     if(decision.actionRequired!=='NO_OP')await tx.botApodAccion.create({data:{expedienteId:c.id,decisionId:decision.decisionId,expectedVersion:nextVersion,actionType:decision.actionRequired,payload:json({...decision.actionPayload,contextStep:combined.stepReached??c.stepReached,...(payload.requiresHumanReview===true?{humanHandoff:true,handoffReason:payload.handoffReason??'HUMANO'}:{})}),idempotencyKey:`apod-${decision.decisionId}`,status:decision.actionRequired==='ESCALATE_HUMAN'?'HUMAN_REQUIRED':'PENDING'}});
     if(decision.actionPayload.kind==='ESCALATE_HUMAN'&&type!==EventType.CLIENT_OPT_OUT&&!c.optOutAt&&decision.actionPayload.clientNoticeTemplate)await tx.botApodAccion.create({data:{expedienteId:c.id,decisionId:randomUUID(),expectedVersion:nextVersion,actionType:'SEND_WHATSAPP_MESSAGE',payload:json({template:payload.requiresHumanReview===true?'CONVERSATION_REPLY':'HUMAN_HANDOFF_NOTICE',...(payload.requiresHumanReview===true?{variables:{replyText:payload.responseText},contextStep:c.stepReached}:{}),parentDecisionId:decision.decisionId,humanHandoff:true,handoffReason:payload.handoffReason??'HUMANO'}),idempotencyKey:`handoff-${decision.decisionId}`}});
     if(type===EventType.OPERATOR_SUBMISSION_CONFIRMED)await tx.botApodHumanTask.updateMany({where:{expedienteId:c.id,kind:'ASSISTED_PROCESSING',status:'OPEN'},data:{status:'RESOLVED',resolvedAt:new Date(),resolvedBy:operator,resolutionRef:String(payload.evidenceRef)}});
@@ -230,12 +230,17 @@ export class WorkflowService {
         // One quiet-period burst is one conversation turn. Keep each durable inbox
         // row and user message; commit all consumed statuses with the one decision.
         const turnRows=[fresh];
-        if(fresh.eventType==='CONVERSATION_TEXT'&&!requiresDeterministicHandoff(String((fresh.payload as Record<string,unknown>).text??''))){
+        // With the brain, a burst is read whole: a stop word or an odd request is judged with the rest of
+        // what the client wrote (training round 9: "ya no quiero seguir" answered as a stop while its
+        // question arrived as a separate turn). Only a message carrying a secret stays on its own.
+        const carriesSecret=(value:string)=>/CONTENIDO_SENSIBLE|REDACTADA/.test(value);
+        const burstable=(value:string)=>this.conversationAgent?.readsWholeBursts?!carriesSecret(value):!requiresDeterministicHandoff(value);
+        if(fresh.eventType==='CONVERSATION_TEXT'&&burstable(String((fresh.payload as Record<string,unknown>).text??''))){
           let size=String((fresh.payload as Record<string,unknown>).text??'').length;
           const following=pending.slice(pending.findIndex(x=>x.id===row.id)+1);
           for(const next of following){
             const value=String((next.payload as Record<string,unknown>).text??'');
-            if(next.eventType!=='CONVERSATION_TEXT'||next.notBefore.getTime()!==fresh.notBefore.getTime()||size+1+value.length>4000||(requiresDeterministicHandoff(value)||!(this.conversationAgent?.readsWholeBursts||relatedConversationText(turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')),value))))break;
+            if(next.eventType!=='CONVERSATION_TEXT'||next.notBefore.getTime()!==fresh.notBefore.getTime()||size+1+value.length>4000||(!burstable(value)||!(this.conversationAgent?.readsWholeBursts||relatedConversationText(turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')),value))))break;
             const current=await this.db.botApodInbox.findUniqueOrThrow({where:{id:next.id}});
             if(current.status!=='PENDING'||current.notBefore.getTime()>Date.now())break;
             turnRows.push(current);size+=1+value.length;
@@ -318,7 +323,16 @@ export class WorkflowService {
             const newer=await tx.botApodInbox.count({where:{expedienteId:id,status:'PENDING',id:{notIn:turnIds},OR:[{notBefore:{gt:new Date()}},{createdAt:{gt:snapshotAt}}]}});
             if(newer)return;
           }
-          await this.transition(tx,c,eventType,eventPayload,{},'WHATSAPP_CLIENT');
+          // Facts the client stated in a turn the brain answered in words: keep the case in step
+          // with the conversation, so later steps (such as the office route) are offered.
+          const stated:WorkflowPatch={};
+          if(eventType===E.smallTalk){
+            if(eventPayload.brainFactCert==='si')stated.hasDigitalCert=true;
+            if(eventPayload.brainFactCert==='no'){stated.hasDigitalCert=false;stated.certDevice='NONE';}
+            if(eventPayload.brainFactDevice==='movil'){stated.hasDigitalCert=true;stated.certDevice='MOBILE';}
+            if(eventPayload.brainFactDevice==='ordenador'){stated.hasDigitalCert=true;stated.certDevice='PC';}
+          }
+          await this.transition(tx,c,eventType,eventPayload,stated,'WHATSAPP_CLIENT');
           const payload=eventPayload;
           const needsHumanReview=payload.requiresHumanReview===true;
           await tx.botApodInbox.updateMany({where:{id:{in:turnIds},status:'PENDING'},data:{status:needsHumanReview?'HUMAN_REQUIRED':'PROCESSED',lastError:needsHumanReview?'CLIENT_MESSAGE_REQUIRES_OPERATOR_REVIEW':null,processedAt:new Date()}});
