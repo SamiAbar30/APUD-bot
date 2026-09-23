@@ -112,7 +112,12 @@ function mechanicalProblems(transcript:Line[]):string[]{
   const problems:string[]=[];const seen=new Map<string,number>();
   transcript.forEach((l,i)=>{
     if(l.who!=='bot')return;
-    if(l.text==='(sin respuesta)'){problems.push(`L${i+1}: el bot no contesta y el caso no está con una persona`);return;}
+    if(l.text==='(sin respuesta)'){
+      // Quiet after "vale, voy a hacerlo" is what a person does too; quiet after a question is not.
+      const asked=[...transcript.slice(0,i)].reverse().filter(x=>x.who==='cliente').slice(0,5).some(x=>/\?|ayuda|no (?:me )?(?:deja|sale|funciona|entiendo)|qu[eé] hago/i.test(x.text));
+      if(asked)problems.push(`L${i+1}: el bot no contesta a una pregunta y el caso no está con una persona`);
+      return;
+    }
     const key=l.text.toLowerCase().replace(/\s+/g,' ').trim();
     if(seen.has(key))problems.push(`L${i+1}: mensaje idéntico al de la línea ${seen.get(key)}`);else seen.set(key,i+1);
     if((l.text.match(/\?/g)?.length??0)>1)problems.push(`L${i+1}: más de una pregunta`);

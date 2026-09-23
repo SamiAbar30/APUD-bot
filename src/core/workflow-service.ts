@@ -230,12 +230,17 @@ export class WorkflowService {
         // One quiet-period burst is one conversation turn. Keep each durable inbox
         // row and user message; commit all consumed statuses with the one decision.
         const turnRows=[fresh];
-        if(fresh.eventType==='CONVERSATION_TEXT'&&!requiresDeterministicHandoff(String((fresh.payload as Record<string,unknown>).text??''))){
+        // With the brain, a burst is read whole: a stop word or an odd request is judged with the rest of
+        // what the client wrote (training round 9: "ya no quiero seguir" answered as a stop while its
+        // question arrived as a separate turn). Only a message carrying a secret stays on its own.
+        const carriesSecret=(value:string)=>/CONTENIDO_SENSIBLE|REDACTADA/.test(value);
+        const burstable=(value:string)=>this.conversationAgent?.readsWholeBursts?!carriesSecret(value):!requiresDeterministicHandoff(value);
+        if(fresh.eventType==='CONVERSATION_TEXT'&&burstable(String((fresh.payload as Record<string,unknown>).text??''))){
           let size=String((fresh.payload as Record<string,unknown>).text??'').length;
           const following=pending.slice(pending.findIndex(x=>x.id===row.id)+1);
           for(const next of following){
             const value=String((next.payload as Record<string,unknown>).text??'');
-            if(next.eventType!=='CONVERSATION_TEXT'||next.notBefore.getTime()!==fresh.notBefore.getTime()||size+1+value.length>4000||(requiresDeterministicHandoff(value)||!(this.conversationAgent?.readsWholeBursts||relatedConversationText(turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')),value))))break;
+            if(next.eventType!=='CONVERSATION_TEXT'||next.notBefore.getTime()!==fresh.notBefore.getTime()||size+1+value.length>4000||(!burstable(value)||!(this.conversationAgent?.readsWholeBursts||relatedConversationText(turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')),value))))break;
             const current=await this.db.botApodInbox.findUniqueOrThrow({where:{id:next.id}});
             if(current.status!=='PENDING'||current.notBefore.getTime()>Date.now())break;
             turnRows.push(current);size+=1+value.length;
