@@ -16,7 +16,7 @@ const schema=z.object({
   DEMO_DATA_ENABLED:bool,DEMO_WHATSAPP_RECIPIENTS:z.string().default('').transform(v=>v.split(',').map(phone=>phone.trim()).filter(Boolean)),
   AIRAM_FULL_NAME:optional,REPRESENTATIVES_FILE:optionalPath,TUTORIAL_FILE:optionalPath,CONSENT_VERSION:optional,CONSENT_TEXT_FILE:optionalPath,
   REVOCATION_GUIDE_FILE:optionalPath,REVOCATION_SCREENSHOTS_FILE:optionalPath,WA_TEMPLATE_CONFIG_FILE:optionalPath,
-  WHATSAPP_ENABLED:bool,WHATSAPP_TRANSPORT:z.enum(['meta','emulator']).default('meta'),WA_API_BASE_URL:optional,WA_ACCESS_TOKEN:optional,WA_PHONE_NUMBER_ID:optional,WA_BUSINESS_ACCOUNT_ID:optional,WA_APP_SECRET:optional,WA_VERIFY_TOKEN:optional,
+  WHATSAPP_ENABLED:bool,WHATSAPP_TRANSPORT:z.enum(['meta','emulator','gateway']).default('meta'),WA_API_BASE_URL:optional,GATEWAY_URL:optional,GATEWAY_BOT_TOKEN:optional,WA_ACCESS_TOKEN:optional,WA_PHONE_NUMBER_ID:optional,WA_BUSINESS_ACCOUNT_ID:optional,WA_APP_SECRET:optional,WA_VERIFY_TOKEN:optional,
   WA_GRAPH_VERSION:z.string().regex(/^v\d+\.\d+$/).default('v23.0'),
   APUD_VERSION:z.enum(['1','2']).default('1').transform(value=>Number(value) as 1|2),
   APUD_CREDENTIAL_KEY:optional.refine(value=>value===undefined||/^[a-fA-F0-9]{64}$/.test(value),'APUD_CREDENTIAL_KEY_MUST_BE_64_HEX'),
@@ -49,7 +49,12 @@ const schema=z.object({
   }
   if(e.DEMO_DATA_ENABLED){if(!e.DEMO_WHATSAPP_RECIPIENTS.length)reject('DEMO_WHATSAPP_RECIPIENTS_REQUIRED');for(const phone of e.DEMO_WHATSAPP_RECIPIENTS)if(!/^\d{5,20}$/.test(phone))reject('DEMO_WHATSAPP_RECIPIENT_INVALID');}
   const needs=(enabled:boolean,keys:(keyof typeof e)[])=>{if(enabled)for(const key of keys)if(!e[key])reject('MISSING_'+key);};
-  needs(e.WHATSAPP_ENABLED,['WA_ACCESS_TOKEN','WA_PHONE_NUMBER_ID','WA_APP_SECRET','WA_VERIFY_TOKEN']);
+  // Through the gateway the bot never holds Meta secrets: the gateway verifies webhooks and owns the token.
+  if(e.WHATSAPP_TRANSPORT==='gateway'){
+    needs(e.WHATSAPP_ENABLED,['GATEWAY_URL','GATEWAY_BOT_TOKEN','WA_PHONE_NUMBER_ID']);
+    if(e.GATEWAY_URL){try{const u=new URL(e.GATEWAY_URL);const loopback=['127.0.0.1','localhost','::1','[::1]'].includes(u.hostname);if(!(u.protocol==='https:'||(u.protocol==='http:'&&loopback))||u.username||u.password||u.hash||u.search)reject('GATEWAY_URL_MUST_BE_HTTPS');}catch{reject('GATEWAY_URL_INVALID');}}
+    if(e.WA_API_BASE_URL)reject('WA_API_BASE_URL_ONLY_FOR_EMULATOR');
+  }else needs(e.WHATSAPP_ENABLED,['WA_ACCESS_TOKEN','WA_PHONE_NUMBER_ID','WA_APP_SECRET','WA_VERIFY_TOKEN']);
   needs(e.KMALEON_ENABLED,['KMALEON_CONFIG_FILE','KMALEON_BASE_URL','KMALEON_CLIENT_ID','KMALEON_CLIENT_SECRET','KMALEON_AUTH_STATE','KMALEON_REDIRECT_URI']);
   needs(e.APUDATA_ENABLED,['APUDATA_CONFIG_FILE','APUDATA_BASE_URL','APUDATA_ACCESS_TOKEN','APUDATA_PAYMENT_IBAN','APUDATA_PAYMENT_EVIDENCE_REF']);
   needs(e.SEDE_ENABLED,['SEDE_RECIPE_FILE','CONSENT_VERSION','CONSENT_TEXT_FILE']);
@@ -65,7 +70,7 @@ export function readinessConfig(e:Env){return {
   serviceMode:e.SERVICE_MODE,dataMode:e.DATA_MODE,simulationEnabled:e.DATA_MODE==='mock',apudVersion:e.APUD_VERSION,
   outboundEnabled:e.DATA_MODE==='mock'?false:e.OUTBOUND_ENABLED,
   demoData:e.DEMO_DATA_ENABLED,demoRecipientCount:e.DEMO_WHATSAPP_RECIPIENTS.length,
-  whatsapp:e.WHATSAPP_ENABLED&&Boolean(e.WA_ACCESS_TOKEN&&e.WA_PHONE_NUMBER_ID&&e.WA_APP_SECRET&&e.WA_VERIFY_TOKEN),whatsappTransport:e.WHATSAPP_TRANSPORT,
+  whatsapp:e.WHATSAPP_ENABLED&&Boolean(e.WHATSAPP_TRANSPORT==='gateway'?e.GATEWAY_URL&&e.GATEWAY_BOT_TOKEN&&e.WA_PHONE_NUMBER_ID:e.WA_ACCESS_TOKEN&&e.WA_PHONE_NUMBER_ID&&e.WA_APP_SECRET&&e.WA_VERIFY_TOKEN),whatsappTransport:e.WHATSAPP_TRANSPORT,
   kmaleon:e.KMALEON_ENABLED&&Boolean(e.KMALEON_CONFIG_FILE&&e.KMALEON_CLIENT_SECRET),
   apudata:e.APUDATA_ENABLED&&Boolean(e.APUDATA_CONFIG_FILE&&e.APUDATA_ACCESS_TOKEN),
   sede:e.SEDE_ENABLED&&Boolean(e.SEDE_RECIPE_FILE&&e.CONSENT_VERSION&&e.CONSENT_TEXT_FILE),

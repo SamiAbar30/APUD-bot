@@ -18,6 +18,7 @@ import { EventType } from '../domain/fsm/states.js';
 import { isValidSpanishIdentityDocument,normalizeIdentityDocument } from '../domain/identity/spanish-identity-document.js';
 import type { KmaleonExpedienteCandidate } from '../contracts/kmaleon.contract.js';
 import { normalizeWebhook,verifyWebhookSignature,verifyWebhookChallenge } from '../adapters/whatsapp/webhook-router.js';
+import { GatewayStream,envelopeFromDelivery } from '../adapters/whatsapp/gateway-stream.js';
 import { verifyApudataCallback } from '../adapters/apudata/apudata-gateway.js';
 import { ApudataCallbackSchema } from '../contracts/apudata.contract.js';
 import { automationRoutes } from './automation.routes.js';
@@ -80,7 +81,8 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
     : undefined;
   const conversationBrain=conversationAiEnabled&&conversationAi.status==='CONFIGURED'?await brainFromEnv(conversationAi.config):undefined;
   const conversationAgent=new StrictConversationAgent(conversationModel,env.CONVERSATION_PHASE,conversationBrain);
-  if(env.WHATSAPP_TRANSPORT==='meta'&&env.WHATSAPP_ENABLED&&env.OUTBOUND_ENABLED&&referenceAgent.context?.packageHash&&conversationAi.config)await requireAgentEvaluations(env.APOD_AGENT_EVAL_REPORT,referenceAgent.context.packageHash,conversationAi.config.model);
+  // Meta and the gateway both reach real phones; only the loopback emulator skips the release check.
+  if(env.WHATSAPP_TRANSPORT!=='emulator'&&env.WHATSAPP_ENABLED&&env.OUTBOUND_ENABLED&&referenceAgent.context?.packageHash&&conversationAi.config)await requireAgentEvaluations(env.APOD_AGENT_EVAL_REPORT,referenceAgent.context.packageHash,conversationAi.config.model);
   flow.conversationAgent=conversationAgent;
   const server=Fastify({logger:{level:env.LOG_LEVEL,redact:['req.headers.authorization','req.headers.cookie','body','password','pfx','certificate']},disableRequestLogging:true,bodyLimit:256*1024,requestTimeout:300000,connectionTimeout:30000,trustProxy:false});
   server.setErrorHandler((error,_request,reply)=>{
@@ -192,6 +194,65 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
     });
   },{prefix:'/api'});
   const debounce=new DebounceBuffer(flow.db,queues.inbound,env.CONVERSATION_QUIET_MS);
+  /** One intake for every WhatsApp transport: the signed webhook and the gateway stream land here alike. */
+  async function ingestEnvelope(envelope:ReturnType<typeof normalizeWebhook>){
+    for(const m of envelope.messages){
+      const duplicate=await flow.db.botApodInbox.findUnique({where:{externalId:m.id}});if(duplicate)continue;
+      const c=await flow.db.botApodExpediente.findUnique({where:{telefono:m.from}});
+      const textBytes=m.text?Buffer.from(m.text,'utf8'):undefined;
+      const textHash=textBytes?sha256(textBytes):undefined;
+      textBytes?.fill(0);
+      if(env.CONVERSATION_PHASE===3&&!m.buttonId&&(m.text||m.media?.mimeType!=='application/pdf')){
+        const text=m.text?redactConversationPii(m.text):/pkcs12/i.test(m.media?.mimeType??'')||/\.(?:p12|pfx)$/i.test(m.media?.filename??'')?'[CONTENIDO_SENSIBLE_OMITIDO]':'El cliente ha enviado un adjunto que requiere revisión de una persona.';
+        const stop=/^(?:stop|baja|no me escribas(?: más| mas)?|no quiero seguir|dejad de escribirme|cancelar contacto)[.! ]*$/i.test(text.trim());
+        // A client who comes back with a question or a document has re-engaged. Filler keeps
+        // the pause; a real question lifts it, so they are not left talking to a silent number.
+        const asksSomething=/\?|donde|cuando|como|que hago|contrase|certificad|password|enviar|mandar/
+          .test(text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase());
+        // A case a person already holds stays with that person: lifting the pause there made the state
+        // machine reject every later message, and the client was left with no reply at all.
+        if(c&&(c.optOutAt||c.automationPaused)&&c.currentState!=='ESCALATED_HUMAN'&&!stop&&(asksSomething||Boolean(m.media)))
+          await flow.db.botApodExpediente.updateMany({where:{id:c.id},data:{optOutAt:null,automationPaused:false}});
+        // Secret chat text is never retained in the ordinary inbox or sent to the model.
+        await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:stop?EventType.CLIENT_OPT_OUT:'CONVERSATION_TEXT',payload:{messageId:m.id,timestamp:m.timestamp,text,...(textHash?{messageSha256:textHash}:{}),...(m.media?{mediaId:m.media.id,mediaType:m.media.mimeType}:{})},source:'WHATSAPP',conversationText:text});
+        continue;
+      }
+      const history=c?boundedConversationHistory((await flow.db.botApodMessage.findMany({where:{expedienteId:c.id},orderBy:[{createdAt:'desc'},{id:'desc'}],take:12})).reverse().map(x=>({role:x.role==='user'?'user' as const:'assistant' as const,content:x.content}))):[];
+      const normalizedText=(m.text??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
+      const stop=/^(?:stop|baja|no me escribas(?: mas)?|no quiero seguir|dejad de escribirme|cancelar contacto)[.! ]*$/.test(normalizedText);
+      const cannotContinue=/^(?:no puedo|no consigo|no quiero compartir(?: mi certificado)?|no quiero enviarlo|no puedo obtenerlo|no puedo instalarlo)[.! ]*$/.test(normalizedText);
+      const suppressed=Boolean(c?.optOutAt||c?.automationPaused);
+      const rollout=!stop&&!cannotContinue&&!suppressed&&!m.buttonId&&m.text&&c?conversationAgent.classifyRollout(m.text):undefined;
+      const rolloutReplyId=rollout&&rolloutReplyIds.has(rollout.responseId)&&(env.CONVERSATION_PHASE<3||rollout.responseId==='SECURITY_ANSWER'||rollout.kind==='GREETING')?rollout.responseId:undefined;
+      // Phase 1/2 never run workflow classification. They emit a fixed
+      // rollout reply or a bounded support reply instead.
+      const classification=!stop&&!cannotContinue&&!suppressed&&env.CONVERSATION_PHASE===3&&!rolloutReplyId&&!m.buttonId&&m.text&&c?await conversationAgent.classify(c,m.text,history):undefined;
+      const conversationReply=!stop&&!cannotContinue&&!suppressed&&!m.buttonId&&m.text&&c&&!rolloutReplyId&&(!classification||classification.kind==='HUMAN_REVIEW')
+        ?await conversationAgent.respond(c,m.text,history)
+        :undefined;
+      const replyId=conversationReply?'CONVERSATION_REPLY':rolloutReplyId;
+      let event=stop?EventType.CLIENT_OPT_OUT:cannotContinue?EventType.CLIENT_EXPORT_FAILED:replyId?E.smallTalk:m.buttonId?buttonEvents[m.buttonId]:m.media?.mimeType==='application/pdf'?'PDF_MEDIA':classification?.kind==='OPTION'?classification.eventType:E.help;
+      let payload:Record<string,string|boolean|number>={messageId:m.id,timestamp:m.timestamp,...(textHash?{messageSha256:textHash}:{})};
+      // CLIENT_SMALL_TALK has a strict event payload contract. Keep the
+      // approved rollout identifiers in the names consumed by the FSM;
+      // the old `conversation*` aliases were only audit labels and made
+      // every greeting fail validation before it could produce a reply.
+      if(conversationReply)payload={...payload,responseId:'CONVERSATION_REPLY',rolloutPhase:env.CONVERSATION_PHASE,rolloutKind:rollout?.kind??'UNSUPPORTED',responseText:conversationReply.text,requiresHumanReview:conversationReply.requiresHumanReview};
+      else if(rollout&&rolloutReplyId)payload={...payload,responseId:rolloutReplyId,rolloutPhase:rollout.phase,rolloutKind:rollout.kind};
+      if(classification)payload={...payload,conversationClassification:classification.kind,...(classification.kind==='OPTION'?{conversationOption:classification.optionId,conversationConfidence:classification.confidence}:{conversationReviewReason:classification.reason})};
+      if(m.media?.mimeType==='application/pdf')payload={...payload,mediaId:m.media.id,...(m.media.sha256?{mediaSha256:m.media.sha256}:{})};
+      if(m.buttonId==='CONSENT_YES'||m.buttonId==='DRAFT_APPROVED'){
+        const previous=m.contextId?await flow.db.botApodAccion.findFirst({where:{expedienteId:c?.id??'UNMATCHED',receipt:{path:['messageId'],equals:m.contextId},status:{in:['EXECUTED','AWAITING_DELIVERY']}}}):null;
+        const receipt=previous?.receipt as Record<string,unknown>|null;
+        const requestedTemplate=m.buttonId==='CONSENT_YES'?'ASSIST_CONSENT_REQUEST':'DRAFT_REVIEW_REQUEST';
+        if(!c||!previous||previous.expectedVersion!==c.version||receipt?.template!==requestedTemplate)event=E.help;
+        else payload={...payload,consentVersion:typeof receipt.consentVersion==='string'?receipt.consentVersion:'',evidenceRef:m.id,contextId:m.contextId!,requestActionId:previous.id,requestVersion:previous.expectedVersion,documentId:typeof receipt.documentId==='string'?receipt.documentId:'',sha256:typeof receipt.documentSha256==='string'?receipt.documentSha256:''};
+      }
+      await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:event,payload,source:'WHATSAPP',...(m.text?{conversationText:m.text}:{})});
+    }
+    // Delivery callbacks must be durable even if received before send response is committed.
+    for(const s of envelope.statuses){await flow.db.botApodInbox.upsert({where:{externalId:`wa-status-${s.id}-${s.status}`},create:{externalId:`wa-status-${s.id}-${s.status}`,source:'WHATSAPP_STATUS',eventType:'DELIVERY_STATUS',payload:json(s),status:'PENDING'},update:{}});}
+  }
   const webhookEnabled=(enabled:boolean)=>(env.DATA_MODE==='mock'&&env.NODE_ENV==='test'&&env.SERVICE_MODE==='setup')||(env.DATA_MODE==='real'&&env.SERVICE_MODE==='live'&&enabled);
   await server.register(async webhooks=>{
     webhooks.removeContentTypeParser('application/json');webhooks.addContentTypeParser('application/json',{parseAs:'buffer',bodyLimit:2*1024*1024},(_req,body,done)=>done(null,body));
@@ -203,62 +264,7 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
         const signature=typeof request.headers['x-hub-signature-256']==='string'?request.headers['x-hub-signature-256']:undefined;
         if(!verifyWebhookSignature(raw,signature,env.WA_APP_SECRET))throw new AppError('INVALID_WEBHOOK_SIGNATURE',401);
         const envelope=normalizeWebhook(JSON.parse(raw.toString('utf8')),env.WA_PHONE_NUMBER_ID);
-        for(const m of envelope.messages){
-          const duplicate=await flow.db.botApodInbox.findUnique({where:{externalId:m.id}});if(duplicate)continue;
-          const c=await flow.db.botApodExpediente.findUnique({where:{telefono:m.from}});
-          const textBytes=m.text?Buffer.from(m.text,'utf8'):undefined;
-          const textHash=textBytes?sha256(textBytes):undefined;
-          textBytes?.fill(0);
-          if(env.CONVERSATION_PHASE===3&&!m.buttonId&&(m.text||m.media?.mimeType!=='application/pdf')){
-            const text=m.text?redactConversationPii(m.text):/pkcs12/i.test(m.media?.mimeType??'')||/\.(?:p12|pfx)$/i.test(m.media?.filename??'')?'[CONTENIDO_SENSIBLE_OMITIDO]':'El cliente ha enviado un adjunto que requiere revisión de una persona.';
-            const stop=/^(?:stop|baja|no me escribas(?: más| mas)?|no quiero seguir|dejad de escribirme|cancelar contacto)[.! ]*$/i.test(text.trim());
-            // A client who comes back with a question or a document has re-engaged. Filler keeps
-            // the pause; a real question lifts it, so they are not left talking to a silent number.
-            const asksSomething=/\?|donde|cuando|como|que hago|contrase|certificad|password|enviar|mandar/
-              .test(text.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase());
-            // A case a person already holds stays with that person: lifting the pause there made the state
-            // machine reject every later message, and the client was left with no reply at all.
-            if(c&&(c.optOutAt||c.automationPaused)&&c.currentState!=='ESCALATED_HUMAN'&&!stop&&(asksSomething||Boolean(m.media)))
-              await flow.db.botApodExpediente.updateMany({where:{id:c.id},data:{optOutAt:null,automationPaused:false}});
-            // Secret chat text is never retained in the ordinary inbox or sent to the model.
-            await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:stop?EventType.CLIENT_OPT_OUT:'CONVERSATION_TEXT',payload:{messageId:m.id,timestamp:m.timestamp,text,...(textHash?{messageSha256:textHash}:{}),...(m.media?{mediaId:m.media.id,mediaType:m.media.mimeType}:{})},source:'WHATSAPP',conversationText:text});
-            continue;
-          }
-          const history=c?boundedConversationHistory((await flow.db.botApodMessage.findMany({where:{expedienteId:c.id},orderBy:[{createdAt:'desc'},{id:'desc'}],take:12})).reverse().map(x=>({role:x.role==='user'?'user' as const:'assistant' as const,content:x.content}))):[];
-          const normalizedText=(m.text??'').normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase().trim();
-          const stop=/^(?:stop|baja|no me escribas(?: mas)?|no quiero seguir|dejad de escribirme|cancelar contacto)[.! ]*$/.test(normalizedText);
-          const cannotContinue=/^(?:no puedo|no consigo|no quiero compartir(?: mi certificado)?|no quiero enviarlo|no puedo obtenerlo|no puedo instalarlo)[.! ]*$/.test(normalizedText);
-          const suppressed=Boolean(c?.optOutAt||c?.automationPaused);
-          const rollout=!stop&&!cannotContinue&&!suppressed&&!m.buttonId&&m.text&&c?conversationAgent.classifyRollout(m.text):undefined;
-          const rolloutReplyId=rollout&&rolloutReplyIds.has(rollout.responseId)&&(env.CONVERSATION_PHASE<3||rollout.responseId==='SECURITY_ANSWER'||rollout.kind==='GREETING')?rollout.responseId:undefined;
-          // Phase 1/2 never run workflow classification. They emit a fixed
-          // rollout reply or a bounded support reply instead.
-          const classification=!stop&&!cannotContinue&&!suppressed&&env.CONVERSATION_PHASE===3&&!rolloutReplyId&&!m.buttonId&&m.text&&c?await conversationAgent.classify(c,m.text,history):undefined;
-          const conversationReply=!stop&&!cannotContinue&&!suppressed&&!m.buttonId&&m.text&&c&&!rolloutReplyId&&(!classification||classification.kind==='HUMAN_REVIEW')
-            ?await conversationAgent.respond(c,m.text,history)
-            :undefined;
-          const replyId=conversationReply?'CONVERSATION_REPLY':rolloutReplyId;
-          let event=stop?EventType.CLIENT_OPT_OUT:cannotContinue?EventType.CLIENT_EXPORT_FAILED:replyId?E.smallTalk:m.buttonId?buttonEvents[m.buttonId]:m.media?.mimeType==='application/pdf'?'PDF_MEDIA':classification?.kind==='OPTION'?classification.eventType:E.help;
-          let payload:Record<string,string|boolean|number>={messageId:m.id,timestamp:m.timestamp,...(textHash?{messageSha256:textHash}:{})};
-          // CLIENT_SMALL_TALK has a strict event payload contract. Keep the
-          // approved rollout identifiers in the names consumed by the FSM;
-          // the old `conversation*` aliases were only audit labels and made
-          // every greeting fail validation before it could produce a reply.
-          if(conversationReply)payload={...payload,responseId:'CONVERSATION_REPLY',rolloutPhase:env.CONVERSATION_PHASE,rolloutKind:rollout?.kind??'UNSUPPORTED',responseText:conversationReply.text,requiresHumanReview:conversationReply.requiresHumanReview};
-          else if(rollout&&rolloutReplyId)payload={...payload,responseId:rolloutReplyId,rolloutPhase:rollout.phase,rolloutKind:rollout.kind};
-          if(classification)payload={...payload,conversationClassification:classification.kind,...(classification.kind==='OPTION'?{conversationOption:classification.optionId,conversationConfidence:classification.confidence}:{conversationReviewReason:classification.reason})};
-          if(m.media?.mimeType==='application/pdf')payload={...payload,mediaId:m.media.id,...(m.media.sha256?{mediaSha256:m.media.sha256}:{})};
-          if(m.buttonId==='CONSENT_YES'||m.buttonId==='DRAFT_APPROVED'){
-            const previous=m.contextId?await flow.db.botApodAccion.findFirst({where:{expedienteId:c?.id??'UNMATCHED',receipt:{path:['messageId'],equals:m.contextId},status:{in:['EXECUTED','AWAITING_DELIVERY']}}}):null;
-            const receipt=previous?.receipt as Record<string,unknown>|null;
-            const requestedTemplate=m.buttonId==='CONSENT_YES'?'ASSIST_CONSENT_REQUEST':'DRAFT_REVIEW_REQUEST';
-            if(!c||!previous||previous.expectedVersion!==c.version||receipt?.template!==requestedTemplate)event=E.help;
-            else payload={...payload,consentVersion:typeof receipt.consentVersion==='string'?receipt.consentVersion:'',evidenceRef:m.id,contextId:m.contextId!,requestActionId:previous.id,requestVersion:previous.expectedVersion,documentId:typeof receipt.documentId==='string'?receipt.documentId:'',sha256:typeof receipt.documentSha256==='string'?receipt.documentSha256:''};
-          }
-          await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:event,payload,source:'WHATSAPP',...(m.text?{conversationText:m.text}:{})});
-        }
-        // Delivery callbacks must be durable even if received before send response is committed.
-        for(const s of envelope.statuses){await flow.db.botApodInbox.upsert({where:{externalId:`wa-status-${s.id}-${s.status}`},create:{externalId:`wa-status-${s.id}-${s.status}`,source:'WHATSAPP_STATUS',eventType:'DELIVERY_STATUS',payload:json(s),status:'PENDING'},update:{}});}
+        await ingestEnvelope(envelope);
         return {received:true};
       }finally{raw.fill(0);}
     });
@@ -272,5 +278,17 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
       }finally{raw.fill(0);}
     });
   },{prefix:'/webhooks'});
+  if(env.WHATSAPP_TRANSPORT==='gateway'&&webhookEnabled(env.WHATSAPP_ENABLED)&&env.GATEWAY_URL&&env.GATEWAY_BOT_TOKEN&&env.WA_PHONE_NUMBER_ID){
+    const phoneNumberId=env.WA_PHONE_NUMBER_ID;const cursorKey=`${env.QUEUE_PREFIX}:gateway-cursor`;
+    const stream=new GatewayStream({
+      url:env.GATEWAY_URL,token:env.GATEWAY_BOT_TOKEN,
+      loadCursor:async()=>Number(await redis.get(cursorKey)??0)||0,
+      saveCursor:async cursor=>{await redis.set(cursorKey,String(cursor));},
+      handle:delivery=>ingestEnvelope(normalizeWebhook(envelopeFromDelivery(delivery),phoneNumberId)),
+      log:server.log,
+    });
+    server.addHook('onReady',async()=>stream.start());
+    server.addHook('onClose',async()=>stream.stop());
+  }
   return server;
 }
