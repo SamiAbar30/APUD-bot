@@ -75,7 +75,7 @@ console.log('PASS no-certificate route gives guidance before offering alternativ
 c={...initial,currentState:ApodState.COURT_FALLBACK_GUIDE_SENT,hasDigitalCert:false};
 const back=await apply('no i dont have it can you show me how to make it');
 assert.equal(c.currentState,'CERT_ACQUISITION_LINKS_SENT');
-assert.match(back.text,/Primero.*certificado digital/);
+assert.match(back.text,/opciones para conseguir el certificado digital/);
 assert.doesNotMatch(back.text,/juzgado|empresa colaboradora/);
 assert.deepEqual(back.buttons?.map(b=>b.id),['DEVICE_PC','DEVICE_MOBILE','NEEDS_ASSISTANCE']);
 console.log('PASS exact reported turn produces digital guidance and help buttons through the FSM');

@@ -14,6 +14,7 @@ export interface OutgoingGuide {
   requiresVerifiedContent?:'APUDATA_PAYMENT_DETAILS'|'APUDATA_VIDEO_INSTRUCTIONS';
 }
 const help={id:'HUMAN_HELP',title:'Ayuda del gestor'} as const;
+const FNMT_APP='https://play.google.com/store/apps/details?id=es.fnmtrcm.ceres.certificadoDigitalFNMT&hl=en-US';
 const deviceButtons:OutgoingGuide['buttons']=[{id:'DEVICE_PC',title:'En el ordenador'},{id:'DEVICE_MOBILE',title:'En el móvil'},{id:'NEEDS_ASSISTANCE',title:'Necesito asistencia'}];
 const acquiredButtons:OutgoingGuide['buttons']=[{id:'DEVICE_PC',title:'Ya lo tengo en PC'},{id:'DEVICE_MOBILE',title:'Ya lo tengo en móvil'},{id:'NEEDS_ASSISTANCE',title:'Ayuda paso a paso'}];
 const revocationText=`El despacho te indicará qué poder debe corregirse y qué datos o facultades faltan. Confirma con el gestor el poder que debe sustituirse antes de revocarlo. Consulta tus poderes en la Sede Judicial (${officialLinks.sede}) y sigue las instrucciones revisadas del despacho. Envíanos el nuevo justificante completo para comprobar la sustitución.`;
@@ -52,7 +53,8 @@ const templates:Record<TemplateId,Renderer>={
   [TemplateId.ASK_HAS_CERT]:(c)=>({text:firstContactText(c)}),
   [TemplateId.ASK_CERT_DEVICE]:()=>({text:'¿Lo tienes en el móvil o en el ordenador?',buttons:deviceButtons}),
   [TemplateId.ASK_HAS_PC]:()=>({text:'Desde el móvil no se puede firmar, hace falta un ordenador. ¿Tienes uno a mano?',buttons:[{id:'HAS_PC',title:'Tengo ordenador'},{id:'NO_PC',title:'No tengo ordenador'},{id:'NEEDS_ASSISTANCE',title:'Necesito asistencia'}]}),
-  [TemplateId.MOBILE_EXPORT_GUIDE]:()=>({text:'Abre la aplicación del certificado y usa «copia de seguridad» o «exportar»: te pedirá ponerle una contraseña al archivo. Luego lo instalas en el ordenador, o si lo prefieres me lo mandas por aquí y la contraseña en otro mensaje, y lo hago yo.',buttons:[{id:'DEVICE_PC',title:'Ya está en el PC'},{id:'NEEDS_ASSISTANCE',title:'Necesito asistencia'}]}),
+  // Protocol 2.1 with the team's own wording for the app (used ~37 times in real chats).
+  [TemplateId.MOBILE_EXPORT_GUIDE]:()=>({text:'Te recomiendo instalarlo en el ordenador para poder firmarlo. Desde la app Certificado Digital, en el apartado Mis Certificados Instalados, pulsa la flecha azul de la derecha y de ahí compartir copia de seguridad. Te pedirá crear una contraseña para esa copia; apúntala. Luego abres ese archivo en el ordenador para instalarlo. Si te atascas, dime en qué paso y lo vemos.',buttons:[{id:'DEVICE_PC',title:'Ya está en el PC'},{id:'NEEDS_ASSISTANCE',title:'Necesito asistencia'}]}),
   // The client cannot do it alone, so the office does it. Said the way a person would say it,
   // and the yes/no button is what records the client's permission.
   [TemplateId.ASSIST_CONSENT_REQUEST]:()=>({text:'No te preocupes, eso lo hago yo por ti. Necesito el archivo de tu certificado y su contraseña, y lo uso solo para este apoderamiento. ¿Me los mandas por aquí?',buttons:[{id:'CONSENT_YES',title:'Sí, te los mando'},{id:'CONSENT_NO',title:'Prefiero que no'}]}),
@@ -94,10 +96,12 @@ const templates:Record<TemplateId,Renderer>={
     return {text:'Si no aparece, revisa la opción de copia de seguridad o exportación de esa aplicación y ponle una contraseña al archivo. Después mándame ese archivo por aquí y la contraseña en otro mensaje, y hago yo el apoderamiento.'};
   },
   // The two routes differ in what the client needs at hand, so say that before asking them to choose.
-  [TemplateId.CERT_ACQUISITION_LINKS_DNI]:()=>({text:'Primero conseguimos tu certificado digital y después hacemos el apoderamiento.\n\n1) DNI electrónico: necesitas lector o móvil compatible y tu PIN.\n2) Vídeo identificación: desde casa, con un coste propio de la FNMT.\n\n¿Cuál te viene mejor?',buttons:acquiredButtons}),
+  // The team's own list of ways to get the certificate (script interno, placeholders
+  // OPCIONES_CONSEGUIR_CERTIFICADO). Cl@ve activation is left out: it cannot sign the apud acta.
+  [TemplateId.CERT_ACQUISITION_LINKS_DNI]:()=>({text:`Te comento las opciones para conseguir el certificado digital:\n\n1- En el Ayuntamiento, de forma presencial.\n2- Desde el móvil con tu DNI electrónico, en la app de la FNMT (opción 3 de la app).\n3- Desde el móvil con la app de la FNMT, con un coste de 3,62 €.\n4- Con una empresa con la que trabajamos, que te hace el apoderamiento completo (35 €).\n\nApp de la FNMT: ${FNMT_APP}\n\nCon Cl@ve PIN no se puede firmar el apoderamiento. Dime cuál prefieres y te explico.`,buttons:acquiredButtons}),
   // Dayana's protocol (18 Sep): the Ayuntamiento hands over a document with a link and a password
   // that installs the certificate on the client's own computer. We never ask for an FNMT code.
-  [TemplateId.CERT_ACQUISITION_LINKS_NIE]:()=>({text:'Pide cita en tu Ayuntamiento, oficina de acreditación de la FNMT, para identificarte con tu NIE.\n\nAllí te entregan un documento con un enlace y una contraseña para descargar el certificado en tu ordenador.',buttons:acquiredButtons}),
+  [TemplateId.CERT_ACQUISITION_LINKS_NIE]:()=>({text:`Con NIE lo más sencillo es pedirlo en tu Ayuntamiento, de forma presencial (no hace falta ir a la policía). Pides cita, vas con tu NIE y allí te entregan un documento con un enlace y una contraseña para descargar el certificado en tu ordenador.\n\nAntes, baja la app de la FNMT y marca la opción 2: ${FNMT_APP}`,buttons:acquiredButtons}),
   [TemplateId.CERT_ACQUISITION_LINKS_UNKNOWN_ID]:()=>({text:'Necesitamos que el gestor confirme tu documento de identidad para indicarte una vía de obtención del certificado adecuada a tu caso.',buttons:[help]}),
   [TemplateId.COURT_POWER_CHECKLIST]:()=>({text:'De acuerdo, puedes hacer el apoderamiento por tu cuenta en el juzgado, de forma gratuita. Lleva tu documento de identidad y la lista adjunta de procuradores, abogados y facultades; confirma con la oficina si necesitas cita. Cuando lo tengas, envíanos el justificante PDF completo para revisarlo.',attachment:'COURT_CHECKLIST'}),
   [TemplateId.APUDATA_NOT_ELIGIBLE_COURT_FALLBACK]:()=>({text:'El proveedor no ha confirmado la admisión de tu documentación. El gestor te ayudará a continuar por la vía presencial. Lleva tu identificación y la lista adjunta a la oficina judicial, previa consulta de sus requisitos y cita.',attachment:'COURT_CHECKLIST'}),
@@ -165,6 +169,10 @@ function templateForState(c:BotApodExpediente):TemplateId {
 export function messageForCase(c:BotApodExpediente,consentVersion?:string,template?:string,variables?:TemplateVariables):OutgoingGuide {
   const selected=template??templateForState(c);
   if(!Object.hasOwn(templates,selected))throw new AppError('UNKNOWN_MESSAGE_TEMPLATE');
-  const guide=templates[selected as TemplateId](c,consentVersion,variables);
+  const rendered=templates[selected as TemplateId](c,consentVersion,variables);
+  // The brain may answer what the client just asked before the step's approved message, so a
+  // question is never ignored because a workflow step fired. The lead was checked like any reply.
+  const lead=typeof variables?.leadText==='string'?variables.leadText.trim():'';
+  const guide=lead&&selected!==TemplateId.CONVERSATION_REPLY?{...rendered,text:`${lead}\n\n${rendered.text}`}:rendered;
   return {...guide,...(guide.buttons?{buttons:guide.buttons.map(button=>({...button}))}:{})};
 }

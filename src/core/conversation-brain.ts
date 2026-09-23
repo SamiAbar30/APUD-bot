@@ -147,7 +147,7 @@ Devuelve SOLO un objeto JSON:
 {"entiendo":"qué quiere decir o pedir el cliente, en una frase",
  "punto":"en qué punto del trámite está el cliente según toda la conversación",
  "accion":"RESPONDER" | "SILENCIO" | "<uno de los pasos listados>",
- "mensaje":"el mensaje para el cliente (obligatorio con RESPONDER; vacío con SILENCIO o con un paso)",
+ "mensaje":"con RESPONDER, tu mensaje al cliente. Con un paso, opcional: una o dos frases que van DELANTE del mensaje del sistema, para responder antes a lo que el cliente preguntó (no repitas lo que ya dice el mensaje del sistema). Vacío con SILENCIO.",
  "traspaso":null | ${HANDOFF_REASONS.map(r => `"${r}"`).join(' | ')}}
 Si pones traspaso, "mensaje" es lo último que le dices antes de que le atienda una persona.`;
   }
@@ -158,7 +158,8 @@ function toTurn(d: Record<string, unknown>, steps: Map<string, { event: EventTyp
   const handoff = typeof d.traspaso === 'string' && (HANDOFF_REASONS as readonly string[]).includes(d.traspaso) ? d.traspaso : null;
   const trace = { brainUnderstanding: String(d.entiendo ?? '').slice(0, 300), brainProgress: String(d.punto ?? '').slice(0, 300) };
   const step = steps.get(action);
-  if (step && !handoff) return { type: step.event, payload: { ...step.payload, ...trace } };
+  const lead = cleanText(String(d.mensaje ?? ''));
+  if (step && !handoff) return { type: step.event, payload: { ...step.payload, ...trace, ...(lead ? { brainLead: lead } : {}) } };
   if (action === 'SILENCIO' && !handoff)
     return { type: EventType.CLIENT_SMALL_TALK, payload: { responseId: 'CONVERSATION_REPLY', rolloutPhase: 3, rolloutKind: 'WORKFLOW_REQUEST', silent: true, requiresHumanReview: false, ...trace } };
   const turn = reply(cleanText(String(d.mensaje ?? '')), handoff, '');
@@ -193,10 +194,11 @@ export function checkDecision(d: Record<string, unknown>, steps: Map<string, unk
     return `La acción "${action}" no está disponible ahora. Elige RESPONDER, SILENCIO o uno de los pasos listados.`;
   if (d.traspaso != null && !(HANDOFF_REASONS as readonly string[]).includes(String(d.traspaso)))
     return `Motivo de traspaso no válido. Usa null o uno de: ${HANDOFF_REASONS.join(', ')}.`;
-  const needsText = action === 'RESPONDER' || d.traspaso != null;
-  if (!needsText) return null;
   const text = cleanText(String(d.mensaje ?? ''));
-  if (!text) return 'Falta el mensaje para el cliente.';
+  if (action === 'SILENCIO' && d.traspaso == null) return null;
+  if (!text) return action === 'RESPONDER' || d.traspaso != null ? 'Falta el mensaje para el cliente.' : null;
+  // With a step, the message is a short lead in front of the step's approved message.
+  if (steps.has(action) && text.length > 400) return 'Con un paso, "mensaje" es solo una frase breve que va delante del mensaje del sistema.';
   return checkReply(text, history, clientText);
 }
 
@@ -207,7 +209,7 @@ export function checkReply(text: string, history: readonly ConversationHistoryMe
   const unknown = urls.map(u => u.replace(/[.,;:]+$/, '')).filter(u => !APPROVED_URLS.includes(u));
   if (unknown.length) return `Has puesto un enlace que no está aprobado (${unknown[0]}). Usa solo los enlaces del manual.`;
   const n = normalize(text);
-  const amounts = [...n.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:€|euros?)/g)].map(m => m[1]!.replace(',', '.'));
+  const amounts = [...text.matchAll(/(\d+(?:[.,]\d+)?)\s*(?:€|euros?\b)/gi)].map(m => m[1]!.replace(',', '.'));
   if (amounts.some(a => !['35', '3.62'].includes(a))) return 'Solo puedes mencionar los importes aprobados: 35 € (empresa colaboradora) y 3,62 € (certificado por la app de la FNMT).';
   if (/\b(?:codigo|clave)s? (?:sms|de verificacion|de seguridad)\b|\bpin (?:de|del) (?:cl@ve|clave|dni|banco)\b|(?:mandame|enviame|pasame|dime) (?:el |tu )?pin\b|datos bancarios|numero de cuenta|\biban\b.{0,20}(?:mandame|enviame|dime)|foto (?:de|del) (?:tu )?dni/.test(n)
     && /(?:mandame|enviame|pasame|dime|necesito|comparte)/.test(n) && !/\bno (?:me )?(?:mandes|envies|compartas|des)\b|nunca/.test(n))
