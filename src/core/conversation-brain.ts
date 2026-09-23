@@ -31,7 +31,6 @@ const STEP_MEANING: Record<string, string> = {
   HAS_PC: 'El cliente (con el certificado en el móvil) dispone de un ordenador.',
   NO_PC: 'El cliente (con el certificado en el móvil) no dispone de ordenador.',
   COURT_APPOINTMENT: 'El cliente ELIGE expresamente hacerlo en persona en el juzgado.',
-  APUDATA_REQUEST: 'El cliente ELIGE expresamente la empresa colaboradora de pago (35 €).',
   OFFICE_TAKES_OVER: 'El cliente, que tiene certificado, quiere que lo hagamos nosotros y está dispuesto a mandarnos el archivo y la contraseña.',
 };
 
@@ -95,7 +94,8 @@ export class ConversationBrain {
     const sent = history.filter(m => m.role === 'assistant').map(m => normalize(m.content));
     for (const [id, event, payload] of candidates) {
       const preview = this.preview(c, event, payload);
-      if (preview === null) continue;
+      // A step the client would not hear about (no message of its own) reads as silence.
+      if (preview === null || (c.id && !preview)) continue;
       // A step whose message the client already received is not a way forward: it is the loop.
       if (preview && sent.some(previous => similarity(previous, normalize(preview)) > 0.7)) continue;
       steps.set(id, { event, payload, preview });
@@ -153,12 +153,14 @@ Si pones traspaso, "mensaje" es lo último que le dices antes de que le atienda 
   }
 }
 
-function toTurn(d: Record<string, unknown>, steps: Map<string, { event: EventType; payload: Record<string, unknown> }>): BrainTurn {
+function toTurn(d: Record<string, unknown>, steps: Map<string, { event: EventType; payload: Record<string, unknown>; preview?: string }>): BrainTurn {
   const action = String(d.accion ?? '');
   const handoff = typeof d.traspaso === 'string' && (HANDOFF_REASONS as readonly string[]).includes(d.traspaso) ? d.traspaso : null;
   const trace = { brainUnderstanding: String(d.entiendo ?? '').slice(0, 300), brainProgress: String(d.punto ?? '').slice(0, 300) };
   const step = steps.get(action);
-  const lead = cleanText(String(d.mensaje ?? ''));
+  let lead = cleanText(String(d.mensaje ?? ''));
+  // A lead that says what the step's message is about to say is the same thing twice.
+  if (step && lead && similarity(normalize(lead), normalize((step as { preview?: string }).preview ?? '')) > 0.35) lead = '';
   if (step && !handoff) return { type: step.event, payload: { ...step.payload, ...trace, ...(lead ? { brainLead: lead } : {}) } };
   if (action === 'SILENCIO' && !handoff)
     return { type: EventType.CLIENT_SMALL_TALK, payload: { responseId: 'CONVERSATION_REPLY', rolloutPhase: 3, rolloutKind: 'WORKFLOW_REQUEST', silent: true, requiresHumanReview: false, ...trace } };
