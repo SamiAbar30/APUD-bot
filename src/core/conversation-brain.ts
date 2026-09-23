@@ -231,9 +231,13 @@ export function checkReply(text: string, history: readonly ConversationHistoryMe
   const mine = normalize(text);
   const repeated = previous.find(p => similarity(p, mine) > 0.6);
   if (repeated) return `Esto ya se lo dijiste casi igual antes («${repeated.slice(0, 120)}…»). Si no le sirvió, cambia de enfoque: responde a lo que pregunta ahora con el paso concreto, explícalo de otra forma o pásalo a una persona.`;
+  // The claims e-mail is for a side topic: once given, repeating it every turn is noise.
+  const recent = history.filter(m => m.role === 'assistant').slice(-3);
+  if (/reclamaciones@litigios\.es/.test(text) && recent.filter(m => m.content.includes('reclamaciones@litigios.es')).length >= 2
+    && !/(?:correo|email|mail|a donde|donde (?:lo|la) mando)[^?]*\?/i.test(clientText))
+    return 'Ya le has dado el correo reclamaciones@litigios.es varias veces. No lo repitas: responde solo a lo que pregunta ahora.';
   const opener = mine.split(' ').slice(0, 3).join(' ');
   if (opener.length > 8 && previous.slice(-3).filter(p => p.startsWith(opener)).length >= 2) return `Empiezas igual que tus últimos mensajes («${opener}…»). Varía, suena a robot.`;
-  void clientText;
   return null;
 }
 

@@ -35,4 +35,8 @@ assert.match(checkDecision({ accion: 'COURT_APPOINTMENT', mensaje: '' }, new Map
 assert.equal(checkDecision({ accion: 'SILENCIO', mensaje: '' }, new Map(), [], 'x'), null);
 assert.ok(similarity('abre la app certificado digital y busca mis certificados instalados', 'abre la app certificado digital y busca mis certificados instalados') > 0.95);
 
+// Round 4: the claims e-mail repeated on every turn of a Sede walkthrough.
+const mailed = [1, 2].map(() => ({ role: 'assistant' as const, content: 'La carta mándala a reclamaciones@litigios.es y seguimos.' }));
+assert.match(checkReply('Marca las dos opciones. La carta, a reclamaciones@litigios.es.', mailed, 'ya he marcado, ¿y ahora?') ?? '', /correo/);
+assert.equal(checkReply('Es reclamaciones@litigios.es, sí.', mailed, '¿a qué correo la mando?'), null);
 console.log(JSON.stringify({ result: 'PASS', suite: 'brain-guards' }));

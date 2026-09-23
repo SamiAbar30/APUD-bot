@@ -255,7 +255,9 @@ export class StrictConversationAgent {
     // The brain reads the conversation and decides. Only messages that must never depend on a
     // model stay below: a delivered secret, an injection attempt, a stop request, an offered code.
     // The branches below are also the fallback when the model cannot be reached.
-    if(this.brain&&this.phase===3&&!requiresDeterministicHandoff(text)&&text!=='[CONTENIDO_SENSIBLE_OMITIDO]'&&!/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)){
+    // A stop word inside a question ("si lo dejo, ¿me cobráis algo?") is a question, not a stop request.
+    const stopWithQuestion=/\?/.test(text)&&!requiresDeterministicHandoff(text.replace(/\b(?:stop|parar|cancelar|no me escribas|no quiero seguir)\b/gi,' '));
+    if(this.brain&&this.phase===3&&(!requiresDeterministicHandoff(text)||stopWithQuestion)&&text!=='[CONTENIDO_SENSIBLE_OMITIDO]'&&!/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)){
       const decided=await this.brain.decide(expediente as BrainCase,text,history,memory);
       if(decided)return decided;
     }
