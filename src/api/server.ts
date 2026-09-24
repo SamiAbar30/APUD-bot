@@ -288,12 +288,14 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
           else if(rollout&&rolloutReplyId)payload={...payload,responseId:rolloutReplyId,rolloutPhase:rollout.phase,rolloutKind:rollout.kind};
           if(classification)payload={...payload,conversationClassification:classification.kind,...(classification.kind==='OPTION'?{conversationOption:classification.optionId,conversationConfidence:classification.confidence}:{conversationReviewReason:classification.reason})};
           if(m.media?.mimeType==='application/pdf')payload={...payload,mediaId:m.media.id,...(m.media.sha256?{mediaSha256:m.media.sha256}:{})};
+          // No consent version configured (live CONSENT_VERSION="") means none to record, not an
+          // invalid tap: sending '' made the rules reject "Sí, te los mando" (live test 24 Sep 15:13).
           if(m.buttonId==='CONSENT_YES'||m.buttonId==='DRAFT_APPROVED'){
             const previous=m.contextId?await flow.db.botApodAccion.findFirst({where:{expedienteId:c?.id??'UNMATCHED',receipt:{path:['messageId'],equals:m.contextId},status:{in:['EXECUTED','AWAITING_DELIVERY']}}}):null;
             const receipt=previous?.receipt as Record<string,unknown>|null;
             const requestedTemplate=m.buttonId==='CONSENT_YES'?'ASSIST_CONSENT_REQUEST':'DRAFT_REVIEW_REQUEST';
             if(!c||!previous||previous.expectedVersion!==c.version||receipt?.template!==requestedTemplate)event=E.help;
-            else payload={...payload,consentVersion:typeof receipt.consentVersion==='string'?receipt.consentVersion:'',evidenceRef:m.id,contextId:m.contextId!,requestActionId:previous.id,requestVersion:previous.expectedVersion,documentId:typeof receipt.documentId==='string'?receipt.documentId:'',sha256:typeof receipt.documentSha256==='string'?receipt.documentSha256:''};
+            else payload={...payload,...(typeof receipt.consentVersion==='string'&&receipt.consentVersion?{consentVersion:receipt.consentVersion}:{}),evidenceRef:m.id,contextId:m.contextId!,requestActionId:previous.id,requestVersion:previous.expectedVersion,documentId:typeof receipt.documentId==='string'?receipt.documentId:'',sha256:typeof receipt.documentSha256==='string'?receipt.documentSha256:''};
           }
           // A tapped button is the client's answer too: keep it in the conversation the brain reads.
           await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:event,payload,source:'WHATSAPP',...(m.text?{conversationText:m.text}:buttonText?{conversationText:buttonText}:{})});
