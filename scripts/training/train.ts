@@ -114,7 +114,8 @@ function mechanicalProblems(transcript:Line[]):string[]{
     if(l.who!=='bot')return;
     if(l.text==='(sin respuesta)'){
       // Quiet after "vale, voy a hacerlo" is what a person does too; quiet after a question is not.
-      const asked=[...transcript.slice(0,i)].reverse().filter(x=>x.who==='cliente').slice(0,5).some(x=>/\?|ayuda|no (?:me )?(?:deja|sale|funciona|entiendo)|qu[eé] hago/i.test(x.text));
+      const latest:Line[]=[];for(let j=i-1;j>=0&&transcript[j]!.who==='cliente';j--)latest.push(transcript[j]!);
+      const asked=latest.some(x=>/\?|ayuda|no (?:me )?(?:deja|sale|funciona|entiendo)|qu[eé] hago/i.test(x.text));
       if(asked)problems.push(`L${i+1}: el bot no contesta a una pregunta y el caso no está con una persona`);
       return;
     }
