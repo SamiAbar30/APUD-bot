@@ -22,6 +22,17 @@ export type IntakeResult =
 export interface MediaSource { download(mediaId: string): Promise<{ content: Buffer; mimeType: string }> }
 export interface MediaPayload { mediaId?: unknown; mediaType?: unknown; filename?: unknown; caption?: unknown }
 
+/** How each check reads in the conversation history the brain sees. */
+export const CERTIFICATE_CHECK_WORDS: Record<CertificateCheck, string> = {
+  OK: 'se abre con su contraseña y está a su nombre; recibido y pasado al equipo',
+  WAITING_PASSWORD: 'recibido, falta que mande la contraseña',
+  WAITING_CERTIFICATE: 'falta el archivo',
+  PASSWORD_INVALID: 'la contraseña que dio no lo abre',
+  EXPIRED: 'está caducado, no sirve',
+  OTHER_PERSON: 'está a nombre de otra persona',
+  NOT_USABLE: 'no se puede usar; lo revisa una persona',
+};
+
 export const certificateMarker = (check: CertificateCheck, validTo?: Date | null) =>
   `[CERTIFICADO:${check}${validTo ? `:${validTo.toISOString().slice(0, 10)}` : ''}]`;
 

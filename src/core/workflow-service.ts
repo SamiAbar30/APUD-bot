@@ -15,7 +15,7 @@ import { FOLLOW_UP_STATES, stepFor, nextFollowUp } from './follow-up.js';
 import { closePhaseOne, phaseOneExpired } from './phase-one.js';
 import { phaseOneReportedOutcome } from './phase-one-intent.js';
 import type { StrictConversationAgent } from './conversation-agent.js';
-import { certificateMarker, type AttachmentIntake } from './attachment-intake.js';
+import { certificateMarker, CERTIFICATE_CHECK_WORDS, type AttachmentIntake } from './attachment-intake.js';
 import { requiresDeterministicHandoff } from './conversation-policy.js';
 import { relatedConversationText } from './conversation-batching.js';
 
@@ -212,7 +212,9 @@ export class WorkflowService {
           const payload=row.payload as Record<string,unknown>;
           const result=await this.attachmentIntake.read({id:c.id,dni:c.dni},payload);
           await this.db.$transaction(async tx=>{
-            await tx.botApodMessage.upsert({where:{externalId:row.externalId},create:{expedienteId:id,externalId:row.externalId,role:'user',content:result.marker.slice(0,2000),source:'WHATSAPP',createdAt:row.createdAt},update:{}});
+            // The conversation keeps a readable line; the certificate code stays in the turn text only.
+            const said=result.route==='CERTIFICATE'?`[Adjunto del cliente: el archivo de su certificado digital. Comprobación del sistema: ${CERTIFICATE_CHECK_WORDS[result.check]}.]`:result.marker;
+            await tx.botApodMessage.upsert({where:{externalId:row.externalId},create:{expedienteId:id,externalId:row.externalId,role:'user',content:said.slice(0,2000),source:'WHATSAPP',createdAt:row.createdAt},update:{}});
             await tx.botApodInbox.update({where:{id:row.id},data:result.route==='APUD_PDF'?{eventType:'PDF_MEDIA'}:{eventType:'CONVERSATION_TEXT',payload:json({...payload,text:result.marker})}});
             await tx.botApodAuditLog.create({data:{expedienteId:id,event:'ATTACHMENT_READ',operator:'WHATSAPP_CLIENT',metadata:json({inboxId:row.id,route:result.route,...(result.route==='CERTIFICATE'?{check:result.check}:{})})}});
           });
@@ -253,7 +255,10 @@ export class WorkflowService {
         // what the client wrote (training round 9: "ya no quiero seguir" answered as a stop while its
         // question arrived as a separate turn). Only a message carrying a secret stays on its own.
         const carriesSecret=(value:string)=>/CONTENIDO_SENSIBLE|REDACTADA|^\[CERTIFICADO:/.test(value);
-        const burstable=(value:string)=>this.conversationAgent?.readsWholeBursts?!carriesSecret(value):!requiresDeterministicHandoff(value);
+        // With the brain the whole burst is one turn, secrets included: a turn that carries a password
+        // or a certificate becomes the certificate check (below), so the words around it ("perdón, la
+        // escribí mal") do not get a separate, contradictory reply.
+        const burstable=(value:string)=>this.conversationAgent?.readsWholeBursts?true:!requiresDeterministicHandoff(value)&&!carriesSecret(value);
         if(fresh.eventType==='CONVERSATION_TEXT'&&burstable(String((fresh.payload as Record<string,unknown>).text??''))){
           let size=String((fresh.payload as Record<string,unknown>).text??'').length;
           const following=pending.slice(pending.findIndex(x=>x.id===row.id)+1);
@@ -308,7 +313,10 @@ export class WorkflowService {
           // An accepted opening receipt works for both transports, across all history.
           const sentOpening=await this.db.botApodAccion.findFirst({where:{expedienteId:id,status:{in:['AWAITING_DELIVERY','EXECUTED']},receipt:{path:['template'],equals:'ASK_HAS_CERT'}},select:{id:true}});
           const introduction=sentOpening??await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',OR:[{content:'Plantilla aprobada: ASK_HAS_CERT'},{AND:[{content:{contains:'LITIGIOS'}},{content:{contains:'apoderamiento apud acta'}}]}]},select:{id:true}});
-          let text=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')).join('\n');
+          const parts=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'').trim());
+          let text=parts.join('\n');
+          if(parts.some(p=>p==='[CONTENIDO_SENSIBLE_OMITIDO]'))text='[CONTENIDO_SENSIBLE_OMITIDO]';
+          else{const certificate=parts.find(p=>/^\[CERTIFICADO:[A-Z_]+/.test(p));if(certificate)text=certificate;}
           // A password that just arrived is checked against the certificate waiting for it.
           if(this.attachmentIntake&&text.trim()==='[CONTENIDO_SENSIBLE_OMITIDO]'){
             const checked=await this.attachmentIntake.checkPair({id:c.id,dni:c.dni});

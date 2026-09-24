@@ -121,9 +121,10 @@ la app «Certificado Digital» de la FNMT, dentro verá «Mis Certificados Insta
     descargar.
 
 Cuando el cliente nos envíe el PDF del apud acta, el sistema lo recibe y lo revisa por su cuenta.
-Tú solo ves texto: si el cliente escribe que ya lo ha enviado o que lo manda, no des las gracias
-por recibirlo ni digas que lo tenemos. Dile que por aquí todavía no te ha llegado ningún archivo y
-pídele que adjunte el PDF en este chat.
+Tú solo ves texto: si el cliente escribe que ya lo ha enviado pero en la conversación no hay
+ninguna línea «[Adjunto del cliente: …]», no des las gracias por recibirlo ni digas que lo tenemos:
+dile que por aquí todavía no te ha llegado y pídele que adjunte el PDF en este chat. Si sí hay una
+línea de adjunto, habla de ese archivo (por ejemplo, que era la guía y no el justificante).
 
 ### Certificado en el móvil
 - Desde el móvil no se firma. Recomiéndale instalarlo en un ordenador para poder firmarlo.

@@ -137,3 +137,44 @@ export async function buttonsOnScreen(db:PrismaClient,caseId:string){
   }
   return out;
 }
+
+/** Files the simulated clients can send: a Sede screenshot (from the official guide), the guide PDF, a voice note, their certificate. */
+/** What each training screenshot shows, in order, so the simulated client sends the right one. */
+export const SCREEN_LABELS:string[]=[];
+
+export async function trainingFiles(db:PrismaClient,lines:Array<{phone:string;caseId:string}>){
+  const {execFileSync}=await import('node:child_process');const {existsSync}=await import('node:fs');const {readFile,mkdir}=await import('node:fs/promises');
+  const {makeTestCertificates}=await import('./make-test-certificates.js');
+  const guide='/Users/litigiosmacmini/Downloads/Desktop/whatsapp_export/ai_agent_apoderamiento/docs/guia_cliente_apud_acta.pdf';
+  const dir='.runtime/training-media';await mkdir(dir,{recursive:true,mode:0o700});
+  // Real Sede screens, extracted from the official guide and labelled by scripts/training/label-screens.ts.
+  if(!existsSync(`${dir}/sede/labels.json`)){await mkdir(`${dir}/sede`,{recursive:true});execFileSync('pdfimages',['-png',guide,`${dir}/sede/img`]);throw new Error('Run scripts/training/label-screens.ts once to label the Sede screens');}
+  const labels=JSON.parse(await readFile(`${dir}/sede/labels.json`,'utf8')) as Record<string,{kind:string;description:string}>;
+  const sede=Object.entries(labels).filter(([,l])=>l.kind==='PANTALLA_SEDE');
+  const screens=await Promise.all(sede.map(([f])=>readFile(`${dir}/sede/${f}`)));
+  SCREEN_LABELS.splice(0,SCREEN_LABELS.length,...sede.map(([,l])=>l.description));
+  const guidePdf=await readFile(guide);
+  const out=new Map<string,{screens:Buffer[];guide:Buffer;certificate:Buffer}>();
+  for(const l of lines){
+    const dni=(await db.botApodExpediente.findUniqueOrThrow({where:{id:l.caseId},select:{dni:true}})).dni;
+    const certs=await makeTestCertificates(dni,`.runtime/test-certs/${l.phone}`);
+    out.set(l.phone,{screens,guide:guidePdf,certificate:certs.valid});
+  }
+  return out;
+}
+
+/** Sends one of the training files as the client, through the emulator's media folder. */
+export async function sendFile(phone:string,kind:string,files:{screens:Buffer[];guide:Buffer;certificate:Buffer}){
+  const {randomInt}=await import('node:crypto');const {writeFile,mkdir}=await import('node:fs/promises');const {join}=await import('node:path');
+  const mediaDir=process.env.WCE_MEDIA_DIR??'.runtime/wce-media';await mkdir(mediaDir,{recursive:true,mode:0o700});
+  const id=String(randomInt(10**11,10**12));
+  const choices:Record<string,{type:string;bytes:Buffer;mime:string;filename?:string}>={
+    captura:{type:'image',bytes:files.screens[Math.min(Math.max((Number(kind.split(':')[1])||1)-1,0),files.screens.length-1)]!,mime:'image/png'},
+    certificado:{type:'document',bytes:files.certificate,mime:'application/x-pkcs12',filename:'certificado.p12'},
+    guia:{type:'document',bytes:files.guide,mime:'application/pdf',filename:'apud acta.pdf'},
+    nota_de_voz:{type:'audio',bytes:Buffer.alloc(0),mime:'audio/ogg'},
+  };
+  const pick=choices[kind.split(':')[0]!];if(!pick)return;
+  if(pick.type!=='audio'){await writeFile(join(mediaDir,id),pick.bytes,{mode:0o600});await writeFile(join(mediaDir,`${id}.json`),JSON.stringify({mimeType:pick.mime}),{mode:0o600});}
+  await postWebhook({contacts:[{profile:{name:'Cliente'},wa_id:phone}],messages:[{from:phone,id:`wamid-file-${Date.now()}-${id}`,timestamp:String(Math.floor(Date.now()/1000)),type:pick.type,[pick.type]:{id,mime_type:pick.mime,...(pick.filename?{filename:pick.filename}:{})}}]});
+}

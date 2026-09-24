@@ -262,7 +262,7 @@ export class StrictConversationAgent {
     // The branches below are also the fallback when the model cannot be reached.
     // A certificate check result: fixed wording, never through a model (certificate and password stay out).
     const checked=/^\[CERTIFICADO:([A-Z_]+)(?::(\d{4}-\d{2}-\d{2}))?\]$/.exec(text.trim());
-    if(checked)return certificateReply(checked[1]!,checked[2],passwordWasRequested(expediente,history));
+    if(checked)return certificateReply(checked[1]!,checked[2],passwordWasRequested(expediente,history),history);
         // A stop word inside a question ("si lo dejo, ¿me cobráis algo?") is a question, not a stop request.
     const stopWithQuestion=/\?/.test(text)&&!requiresDeterministicHandoff(text.replace(/\b(?:stop|parar|cancelar|no me escribas|no quiero seguir)\b/gi,' '));
     if(this.brain&&this.phase===3&&(!requiresDeterministicHandoff(text)||stopWithQuestion)&&text!=='[CONTENIDO_SENSIBLE_OMITIDO]'&&!/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)){
@@ -531,7 +531,8 @@ function passwordWasRequested(expediente:CaseContext,history:readonly Conversati
 }
 
 /** What the client hears after the office checked their certificate and password. */
-function certificateReply(check:string,validTo:string|undefined,requested:boolean):{type:EventType;payload:Record<string,unknown>}{
+function certificateReply(check:string,validTo:string|undefined,requested:boolean,history:readonly ConversationHistoryMessage[]=[]):{type:EventType;payload:Record<string,unknown>}{
+  const saidBefore=(fragment:string)=>history.filter(m=>m.role==='assistant').slice(-3).some(m=>m.content.includes(fragment));
   const say=(text:string,handoff?:string)=>({type:EventType.CLIENT_SMALL_TALK,payload:{responseId:'CONVERSATION_REPLY',rolloutPhase:3,rolloutKind:'WORKFLOW_REQUEST',responseText:text,requiresHumanReview:Boolean(handoff),certificateCheck:check,...(handoff?{handoffReason:handoff,handoffMarker:`[[HANDOFF:${handoff}]]`}:{})}});
   const date=validTo?validTo.split('-').reverse().join('/'):'';
   switch(check){
@@ -540,7 +541,10 @@ function certificateReply(check:string,validTo:string|undefined,requested:boolea
     case 'WAITING_CERTIFICATE':return requested
       ?say('Gracias. Ahora mándame por aquí el archivo del certificado (suele terminar en .p12 o .pfx).')
       :say('Por seguridad, no me mandes códigos ni claves por aquí: no los necesito y no los uso. Si era la contraseña de tu certificado, solo hace falta si lo hacemos nosotros; dime y te explico cómo.');
-    case 'PASSWORD_INVALID':return say('Esa contraseña no abre el archivo del certificado. Revísala (distingue mayúsculas y minúsculas) y mándamela otra vez en un mensaje aparte.');
+    case 'PASSWORD_INVALID':return saidBefore('no abre el archivo del certificado')
+      // Twice wrong: the useful next step is a new copy with a new password, not the same sentence.
+      ?say('Sigue sin abrirse con esa contraseña. Tiene que ser la que pusiste al sacar la copia de seguridad en la app. Si no la recuerdas, saca una copia nueva con una contraseña nueva y me mandas las dos cosas otra vez.')
+      :say('Esa contraseña no abre el archivo del certificado. Revísala (distingue mayúsculas y minúsculas) y mándamela otra vez en un mensaje aparte.');
     case 'EXPIRED':return say(`El certificado que me has mandado caducó${date?` el ${date}`:''}, así que ya no sirve para firmar. Hay que sacar uno nuevo; si quieres te explico cómo.`);
     case 'OTHER_PERSON':return say('Ese certificado no está a tu nombre, y el apoderamiento solo se puede firmar con uno tuyo. ¿Tienes alguno a tu nombre?');
     default:return say('No he podido usar ese archivo del certificado. Se lo paso a una compañera del equipo para que lo revise contigo.','FALTA_DATO');
