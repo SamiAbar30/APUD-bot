@@ -123,6 +123,24 @@ check('9 team task opened for the payment',/PAGO/.test(paidTask?.reason??''),pai
 const idAnswer=await say(fourth.phone,p.caseId,['Tengo DNI']);
 check('9 answer after the handover is acknowledged, not ignored',idAnswer.length===1&&!/cuenta|iban/i.test(idAnswer[0]??''),idAnswer.join(' | ').slice(0,200));
 
+// ---- Consent tap on the live settings (live test 24 Sep, 15:13) ----
+// Manager tapped "Sí, te los mando": the tap reached the rules with an empty consent version (live
+// CONSENT_VERSION=""), was rejected as invalid and escalated with no word to the client.
+// Run with CONSENT_VERSION="" on the stack to replay the live settings.
+transcript.push('=== Consent tap ===');
+await clearQueueFor([fourth.caseId]);
+const q=await resetLine(db,fourth.phone);
+await officeReplies(db,q.caseId,new Date(q.started.getTime()-1),{firstWithinMs:60_000,settleMs:2_000});
+await say(fourth.phone,q.caseId,['Hola, sí tengo el certificado']);
+await tap(fourth.phone,q.caseId,'DEVICE_MOBILE','En el móvil',(await sentIds(q.caseId)).at(-1));
+await tap(fourth.phone,q.caseId,'NO_PC','No tengo ordenador',(await sentIds(q.caseId)).at(-1));
+const consent=await tap(fourth.phone,q.caseId,'CONSENT_YES','Sí, te los mando',(await sentIds(q.caseId)).at(-1));
+const afterConsent=await state(q.caseId);
+check('10 "Sí, te los mando" gets a reply (no silence)',consent.length===1,consent.join(' | ').slice(0,200));
+check('10 consent continues the office route, not a handover',afterConsent.currentState!=='ESCALATED_HUMAN'&&/archivo|\.p12|\.pfx/i.test(consent.join(' '))&&/contrase/i.test(consent.join(' ')),`${afterConsent.currentState}: ${consent.join(' ').slice(0,160)}`);
+const nudge=await say(fourth.phone,q.caseId,['Hola? sigues ahí?']);
+check('10 next message answered too',nudge.length===1,nudge.join(' | ').slice(0,160));
+
 await db.$disconnect();
 console.log('\n'+transcript.join('\n'));
 const failed=checks.filter(c=>!c.pass);
