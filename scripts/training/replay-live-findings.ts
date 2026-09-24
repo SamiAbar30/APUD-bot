@@ -72,10 +72,14 @@ await say(sami.phone,s.caseId,['No tengo']);
 await tap(sami.phone,s.caseId,'DEVICE_MOBILE','En el móvil',openingId);
 const afterOld=await state(s.caseId);
 check('3 old button read as text, not as "has certificate"',afterOld.hasDigitalCert!==true,`hasDigitalCert=${afterOld.hasDigitalCert} state=${afterOld.currentState}`);
+const optionsId=(await sentIds(s.caseId)).at(-1);
+const helpReply=await tap(sami.phone,s.caseId,'NEEDS_ASSISTANCE','Ayuda paso a paso',optionsId);
+check('8 help button answered by the brain, not the old fixed help text',helpReply.length>0&&!/video-identificacion|obtener-certificado-con-dnie|qu[eé] aplicaci[oó]n utilizaste/i.test(helpReply.join(' ')),helpReply.join(' ').slice(0,160));
 await say(sami.phone,s.caseId,['Ya lo he conseguido y lo tengo en un ordenador. ¿Ahora qué hago?']);
 check('4 on a computer → PC guide sent',(await state(s.caseId)).currentState==='PC_TUTORIAL_SENT',(await state(s.caseId)).currentState);
 const handoff=await say(sami.phone,s.caseId,['Ya entré en la sede. Creo que no comprendes lo que necesito. Necesito asistencia, hay montón de enlaces','¿Puedo enviarte una imagen?']);
 const held=await state(s.caseId);
+check('7a "no comprendes… necesito asistencia" goes to a person (manager rule)',held.currentState==='ESCALATED_HUMAN',held.currentState);
 check('7 handover asks for nothing more',!(held.currentState==='ESCALATED_HUMAN'&&/captura|m[aá]ndame (?:una )?(?:foto|imagen)|env[ií]ame (?:una )?(?:foto|imagen|captura)/i.test(handoff.join(' '))),`${held.currentState}: ${handoff.join(' ').slice(0,160)}`);
 
 // ---- Bursts with a stop word or a trick inside (training round 9) ----

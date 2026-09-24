@@ -207,7 +207,10 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
       if(c&&m.buttonId&&!['CONSENT_YES','CONSENT_NO','DRAFT_APPROVED','DRAFT_REJECTED'].includes(m.buttonId)){
         const lastSent=await flow.db.botApodAccion.findFirst({where:{expedienteId:c.id,actionType:{in:['SEND_WHATSAPP_MESSAGE','SEND_WHATSAPP_BUTTONS','SEND_WHATSAPP_MEDIA']},status:{in:['EXECUTED','AWAITING_DELIVERY']}},orderBy:{createdAt:'desc'},select:{receipt:true}});
         const lastId=(lastSent?.receipt as {messageId?:unknown}|null)?.messageId;
-        if(!m.contextId||m.contextId!==lastId){const {buttonId,buttonTitle:_t,...rest}=m;m={...rest,type:'text',textPresent:true,text:m.buttonTitle??REPLY_BUTTON_TEXT[buttonId]};}
+        // "Necesito asistencia" / "Ayuda paso a paso" is a request the brain answers with the
+        // conversation in view; as a workflow event it fired fixed help texts (training round 10).
+        const brainAnswers=m.buttonId==='NEEDS_ASSISTANCE'&&conversationAgent.readsWholeBursts;
+        if(brainAnswers||!m.contextId||m.contextId!==lastId){const {buttonId,buttonTitle:_t,...rest}=m;m={...rest,type:'text',textPresent:true,text:m.buttonTitle??REPLY_BUTTON_TEXT[buttonId]};}
       }
       const buttonText=m.buttonId?(m.buttonTitle??REPLY_BUTTON_TEXT[m.buttonId]):undefined;
       const textBytes=m.text?Buffer.from(m.text,'utf8'):undefined;
