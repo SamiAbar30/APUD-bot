@@ -96,3 +96,27 @@ context, which is not how they arrive live.
    common practice, not from a firm document; confirm or replace.
 3. The 12-step Sede guide is the official PDF's text. If the Sede asks for data the guide does not
    cover (e.g. a professional's NIF), the bot hands over as FALTA_DATO.
+
+
+## Files clients send (24 Sep)
+Every file is downloaded once and identified by its bytes, not its name or label
+(`src/core/attachment-kind.ts`, `src/core/attachment-intake.ts`):
+
+| Arrives | What happens | What the client hears |
+|---|---|---|
+| Apud acta justificante (PDF) | existing audit (DNI, Airam, facultades, pages) | thanks, being reviewed |
+| The firm's guide, another PDF, a scan without text | read locally | that it is not the justificante and what is needed |
+| Certificate (.p12/.pfx, any name) | kept encrypted (AES-GCM vault, `APUD_CREDENTIAL_KEY`); when the password arrives, in either order: opens? in the client's name? expired? | fixed wording per result; never through a model |
+| Screenshot or photo | described by the vision model (screen, step, error text; personal data omitted; ID documents discarded); image not stored | the next step from that screen |
+| Voice note, video, Word, ZIP | — | please write it / send it as PDF |
+
+Captions are kept. Validated on the firm's real WhatsApp export (485/485 certificates, 8610/8610 images,
+3944/3945 PDFs identified; justificante vs other PDFs) with `scripts/validate-attachment-kinds.ts`;
+`scripts/test-attachments.ts`; live on the test stack with `scripts/training/replay-attachments.ts`
+(15 checks). Training clients send real Sede screens (from the guide, labelled by
+`scripts/training/label-screens.ts`), their certificate (FNMT-shaped test certificates), the guide
+PDF and voice notes. Round 12 with files: 42/50; its 7 failures rerun after fixes: 7/7.
+
+**Keep a copy of `APUD_CREDENTIAL_KEY`** (in `.env.gateway` for the live bot): without it the stored
+certificates cannot be decrypted. The Render gateway remembers which file belongs to which number
+only in memory, so a gateway restart between a file's arrival and its download loses it.
