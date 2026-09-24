@@ -373,6 +373,10 @@ function guidedHelp(ctx: Ctx): TransitionResult {
 }
 
 function toApudataPreapproval(ctx: Ctx): TransitionResult {
+  // The bot never contacts the partner company itself unless that integration is switched on
+  // (APUD_VERSION=2): otherwise a person from the team takes the paid route straight away.
+  if (ctx.payload.partnerIntegration !== true)
+    return escalate(ctx, EscalationReason.CLIENT_NEEDS_HUMAN, 'MEDIUM', 'Client chose the paid partner route: a person from the team takes it', { clientNotice: TemplateId.HUMAN_HANDOFF_NOTICE });
   const action: ActionSpec = {
     kind: 'CALL_APUDATA_PREAPPROVAL',
     operation: ApudataOperation.PREAPPROVAL_CHECK,

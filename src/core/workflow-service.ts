@@ -10,6 +10,7 @@ import { AppError } from '../infrastructure/security.js';
 import type { DocumentStorage } from '../infrastructure/storage.js';
 import type { Env } from '../config/env.js';
 import { E } from './workflow-events.js';
+import { PAID_ROUTE_HANDOFF_TEXT } from './messages.js';
 import type { KmaleonExpedienteCandidate } from '../contracts/kmaleon.contract.js';
 import { FOLLOW_UP_STATES, stepFor, nextFollowUp } from './follow-up.js';
 import { closePhaseOne, phaseOneExpired } from './phase-one.js';
@@ -60,6 +61,9 @@ export class WorkflowService {
       const notice=await tx.botApodAccion.findFirst({where:{expedienteId:c.id,actionType:'NOTIFY_DAYANA',status:'EXECUTED',receipt:{path:['documentSha256'],equals:document.sha256Hash}},orderBy:{createdAt:'desc'}});
       if(!notice||(notice.receipt as Record<string,unknown>|null)?.verified!==true||payload.template!=='COMPLETION_NOTICE')throw new AppError('VERIFIED_DAYANA_NOTICE_REQUIRED');
     }
+    // Paid route: only with the partner integration on (APUD_VERSION=2) may the bot contact the
+    // partner company; otherwise it answers with the team's paid-route reply and hands to a person.
+    if(type===EventType.CLIENT_REQUESTS_URGENT_PAID)payload=this.env.APUD_VERSION===2?{...payload,partnerIntegration:true}:{...payload,requiresHumanReview:true,handoffReason:'PAGO',responseText:PAID_ROUTE_HANDOFF_TEXT};
     const snapshot={...c,...patch,documentSha256:document?.sha256Hash??null,documentType:document?.documentType??null,kmaleonDocumentId:document?.kmaleonDocumentId??null} as unknown as Expediente;
     const decision=evaluateNextStep(snapshot,{type:type as EventType,payload} as WorkflowEvent);
     const lead=typeof payload.brainLead==='string'?payload.brainLead.trim():'';

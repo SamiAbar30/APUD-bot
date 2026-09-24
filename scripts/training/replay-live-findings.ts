@@ -98,7 +98,8 @@ check('6c trick inside a burst: one reply, internal instructions refused',trick.
 
 // ---- Paid route while the partner integration is off (live test 24 Sep, 13:20) ----
 // Certificate on the phone, no computer, refuses to send it, taps "Gestión de pago": the bot went
-// silent and the case sat in APUDATA_PENDING_PREAPPROVAL. It must answer and pass to a person.
+// silent and the case sat in APUDATA_PENDING_PREAPPROVAL. The bot never contacts the partner company:
+// it answers with the team's paid-route reply and passes to a person.
 transcript.push('=== Paid route ===');
 const fourth=lines[3]??lines[2]!;
 await clearQueueFor([fourth.caseId]);
@@ -112,9 +113,11 @@ const beforePaid=await state(p.caseId);
 const paid=await tap(fourth.phone,p.caseId,'APUDATA_REQUEST','Gestión de pago',(await sentIds(p.caseId)).at(-1));
 const afterPaid=await state(p.caseId);
 const paidText=paid.join(' ');
-check('9 "Gestión de pago" gets a reply (no silence)',paid.length>0,`from ${beforePaid.currentState}: ${paidText.slice(0,200)}`);
+check('9 "Gestión de pago" gets one reply (no silence)',paid.length===1,`from ${beforePaid.currentState}: ${paidText.slice(0,200)}`);
 check('9 paid reply: 35 €, paid first, DNI/NIE, court still free, no bank account',/35/.test(paidText)&&/antes|primero/i.test(paidText)&&/\bDNI\b/.test(paidText)&&/\bNIE\b/.test(paidText)&&/juzgado/i.test(paidText)&&/gratis|gratuit/i.test(paidText)&&!/\bES\d{2}[\s\d]{10,}|\biban\b/i.test(paidText),paidText.slice(0,240));
 check('9 case goes to a person, not stuck waiting for the partner',afterPaid.currentState==='ESCALATED_HUMAN',afterPaid.currentState);
+const partnerCalls=await db.botApodAccion.count({where:{expedienteId:p.caseId,actionType:'CALL_APUDATA_PREAPPROVAL'}});
+check('9 bot does not contact the partner company',partnerCalls===0,`${partnerCalls} partner requests`);
 const paidTask=await db.botApodHumanTask.findFirst({where:{expedienteId:p.caseId,status:'OPEN'},orderBy:{createdAt:'desc'}});
 check('9 team task opened for the payment',/PAGO/.test(paidTask?.reason??''),paidTask?.reason??'no task');
 const idAnswer=await say(fourth.phone,p.caseId,['Tengo DNI']);
