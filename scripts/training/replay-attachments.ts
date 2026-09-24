@@ -16,7 +16,6 @@ import {makeTestCertificates,TEST_CERT_PASSWORD} from './make-test-certificates.
 const db=new PrismaClient();
 const mediaDir=process.env.WCE_MEDIA_DIR??'.runtime/wce-media';
 const guidePdf='/Users/litigiosmacmini/Downloads/Desktop/whatsapp_export/ai_agent_apoderamiento/docs/guia_cliente_apud_acta.pdf';
-const scratch=process.env.ATTACHMENT_SAMPLES??'/private/tmp/claude-501/-Users-litigiosmacmini/d9569bba-ef98-4277-baf0-d71cdf373c92/scratchpad/media';
 const checks:Array<{name:string;pass:boolean;detail:string}>=[];
 const check=(name:string,pass:boolean,detail='')=>{checks.push({name,pass,detail});console.log(`${pass?'PASS':'FAIL'} ${name}${detail?` — ${detail.replace(/\s+/g,' ').slice(0,170)}`:''}`);};
 const transcript:string[]=[];
@@ -52,7 +51,7 @@ const certs=await makeTestCertificates(dni);
 transcript.push('=== Pantallas y documentos ===');
 let caseId=await fresh(line);
 await turn(caseId,'Sí tengo, en el ordenador',()=>sendText(line.phone,'Sí tengo, en el ordenador'));
-const screenshot=await readFile(join(scratch,'guia-2.png'));
+const screenshot=await readFile('.runtime/training-media/sede/img-008.png');
 let r=await turn(caseId,'[imagen: captura de la Sede] «estoy aquí, ¿qué pulso?»',()=>sendMedia(line.phone,'image',screenshot,'image/png',{caption:'estoy aquí, ¿qué pulso?'}));
 check('screenshot is understood and answered with a step',!/no puedo (?:ver|recibir|abrir) (?:im[aá]genes|la imagen|capturas)/i.test(r)&&/apoderamiento|certificado digital|[aá]rea del ciudadano|poderdante|siguiente|pulsa/i.test(r),r);
 r=await turn(caseId,'[PDF: la guía del despacho, como si fuera el justificante] «ya está, te mando el justificante»',async()=>sendMedia(line.phone,'document',await readFile(guidePdf),'application/pdf',{filename:'justificante.pdf',caption:'ya está, te mando el justificante'}));
@@ -88,6 +87,17 @@ r=await turn(caseId,`«la contraseña es ${TEST_CERT_PASSWORD}»`,()=>sendText(l
 check('password first: asks for the file',/archivo|\.p12|\.pfx/i.test(r),r);
 r=await turn(caseId,'[certificado de otra persona]',()=>sendMedia(line.phone,'document',certs.otherPerson,'application/x-pkcs12',{filename:'cert.pfx'}));
 check('certificate of another person is detected',/no est[aá] a tu nombre|otra persona/i.test(r),r);
+
+transcript.push('=== Round 12: Cl@ve screen, certificate and password in one burst ===');
+caseId=await fresh(line);
+await turn(caseId,'Sí tengo, en el ordenador',()=>sendText(line.phone,'Sí tengo, en el ordenador'));
+const claveScreen=await readFile('.runtime/training-media/sede/img-001.png');
+r=await turn(caseId,'[captura: elegir Certificado electrónico o Cl@ve PIN] «¿cuál le doy?»',()=>sendMedia(line.phone,'image',claveScreen,'image/png',{caption:'¿cuál le doy?'}));
+check('Cl@ve choice screen is answered, not treated as a code',!/no me mandes c[oó]digos|c[oó]digos ni claves/i.test(r)&&/certificado/i.test(r),r);
+caseId=await fresh(line);
+await turn(caseId,'«no tengo ordenador, hacedlo vosotros»',()=>sendText(line.phone,'Lo tengo en el móvil y no tengo ordenador, ¿lo hacéis vosotros?'));
+r=await turn(caseId,'[certificado] + «te lo mando ahora» + «la contraseña es …» (una ráfaga)',async()=>{await sendMedia(line.phone,'document',certs.valid,'application/x-pkcs12',{filename:'certificado.p12'});await sendText(line.phone,'Vale te lo mando ahora');await sendText(line.phone,`La contraseña es ${TEST_CERT_PASSWORD}`);});
+check('certificate + password in one burst: checked once, not asked again',/se abre|a tu nombre/i.test(r)&&!/m[aá]ndame (?:por aqu[ií] )?el archivo/i.test(r),r);
 
 const leaked=await db.botApodMessage.count({where:{content:{contains:TEST_CERT_PASSWORD}}});
 check('the password never appears in the chat history',leaked===0,`${leaked} messages contain it`);

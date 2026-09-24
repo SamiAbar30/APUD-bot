@@ -75,7 +75,7 @@ export class ConversationBrain {
     let feedback: string | undefined;
     for (let attempt = 0; attempt < 3; attempt++) {
       let raw: unknown;
-      try { raw = await this.model.think({ system, history: cleanHistory, text: redactConversationPii(text), ...(feedback ? { feedback } : {}) }); }
+      try { raw = await this.model.think({ system, history: cleanHistory, text: clientLine(text), ...(feedback ? { feedback } : {}) }); }
       catch { raw = null; }
       if (!raw || typeof raw !== 'object') { if (attempt === 0) continue; return null; }
       const decision = raw as Record<string, unknown>;
@@ -295,6 +295,14 @@ export function similarity(a: string, b: string): number {
   return shared / Math.min(x.size, y.size) * (Math.min(x.size, y.size) / Math.max(x.size, y.size)) ** 0.5;
 }
 
+/**
+ * A client line as the model may read it. Lines the system wrote about a file were redacted piece by
+ * piece when they were composed; redacting them again reads a screen's "Cl@ve PIN" as a secret.
+ */
+function clientLine(text: string): string {
+  return /^\[Adjunto del cliente:/.test(text.trim()) ? text : redactConversationPii(text);
+}
+
 /** The whole recent conversation, redacted, so the brain can see what already happened. */
 function recentHistory(history: readonly ConversationHistoryMessage[]): ConversationHistoryMessage[] {
   const out: ConversationHistoryMessage[] = [];
@@ -302,7 +310,7 @@ function recentHistory(history: readonly ConversationHistoryMessage[]): Conversa
   for (const m of [...history].reverse().slice(0, 40)) {
     // Our own messages passed the reply checks when they were sent; only client text is redacted,
     // so the brain still sees the links and steps it already gave.
-    const content = (m.role === 'user' ? redactConversationPii(m.content) : m.content).slice(0, 1500);
+    const content = (m.role === 'user' ? clientLine(m.content) : m.content).slice(0, 1500);
     if (budget - content.length < 0) break;
     budget -= content.length;
     out.push({ role: m.role, content });
