@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { MediaMetadataSchema, type WhatsAppAccepted, type ReplyButtonId } from '../../contracts/whatsapp.contract.js';
 import { AdapterError, checkedHttpsUrl, readBounded, requestJson, requireValue, sha256 } from '../common/http.js';
-export interface WhatsAppOptions {accessToken:string;phoneNumberId:string;apiVersion:string;transport?:'meta'|'emulator';apiBaseUrl?:string;writesEnabled?:boolean;allowedRecipients?:readonly string[];mediaHosts?:string[];maxMediaBytes?:number;timeoutMs?:number}
+export interface WhatsAppOptions {accessToken:string;phoneNumberId:string;apiVersion:string;transport?:'meta'|'emulator';apiBaseUrl?:string;writesEnabled?:boolean;allowedRecipients?:readonly string[];mediaHosts?:string[];maxMediaBytes?:number;timeoutMs?:number;emulatorMediaDir?:string}
 const Accepted=z.object({messages:z.array(z.object({id:z.string().min(1)})).min(1)});
 export function assertWhatsAppRecipientAllowed(to:string,allowedRecipients?:readonly string[]):void{
   const recipient=to.trim();
@@ -55,7 +55,16 @@ export class WhatsAppClient {
     const parsed=z.object({id:z.string().regex(/^\d+$/)}).safeParse(raw);if(!parsed.success)throw new AdapterError('INVALID_META_UPLOAD_RESPONSE','uncertain');return parsed.data.id;
   }
   async downloadMedia(mediaId:string,checks:{expectedSha256?:string;allowedMimeTypes?:string[]}={}):Promise<{content:Buffer;sha256:string;mimeType:string}>{
-    if(this.emulatorEndpoint)throw new AdapterError('EMULATOR_MEDIA_DOWNLOAD_UNSUPPORTED');
+    if(this.emulatorEndpoint){
+      // The local emulator has no media server: the simulator drops the file and its type in a
+      // folder, so the bot's own identification, reading and checks run on real bytes.
+      if(!this.options.emulatorMediaDir||!/^\d+$/.test(mediaId))throw new AdapterError('EMULATOR_MEDIA_DOWNLOAD_UNSUPPORTED');
+      const {readFile}=await import('node:fs/promises');const {join}=await import('node:path');
+      const content=await readFile(join(this.options.emulatorMediaDir,mediaId));const meta=JSON.parse(await readFile(join(this.options.emulatorMediaDir,`${mediaId}.json`),'utf8')) as {mimeType?:string};
+      const mimeType=meta.mimeType??'application/octet-stream';
+      if(checks.allowedMimeTypes&&!checks.allowedMimeTypes.includes(mimeType)){content.fill(0);throw new AdapterError('MEDIA_POLICY_REJECTED');}
+      return {content,sha256:sha256(content),mimeType};
+    }
     const metadata=MediaMetadataSchema.safeParse(await requestJson(this.endpoint(mediaId),{headers:this.headers()},{timeoutMs:this.options.timeoutMs}));
     if(!metadata.success||metadata.data.id!==mediaId)throw new AdapterError('INVALID_META_MEDIA_METADATA');
     const meta=metadata.data;const max=this.options.maxMediaBytes??20*1024*1024;

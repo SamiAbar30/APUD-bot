@@ -13,11 +13,11 @@ export function verifyWebhookChallenge(query: Record<string, unknown>, verifyTok
   const actual = Buffer.from(query['hub.verify_token']); const expected = Buffer.from(verifyToken);
   return actual.length === expected.length && timingSafeEqual(actual, expected) ? query['hub.challenge'] : null;
 }
-const Media = z.object({id:z.string().regex(/^\d+$/),mime_type:z.string().max(100),sha256:z.string().max(100).optional(),filename:z.string().max(256).optional()});
+const Media = z.object({id:z.string().regex(/^\d+$/),mime_type:z.string().max(100),sha256:z.string().max(100).optional(),filename:z.string().max(256).optional(),caption:z.string().max(1024).nullable().optional()});
 const Message = z.object({
   id:z.string().min(1).max(256),from:z.string().regex(/^\d{5,20}$/),timestamp:z.string().regex(/^\d+$/),type:z.string(),
   text:z.object({body:z.string().min(1).max(4000)}).optional(),
-  context:z.object({id:z.string().max(256)}).optional(),document:Media.optional(),image:Media.optional(),
+  context:z.object({id:z.string().max(256)}).optional(),document:Media.optional(),image:Media.optional(),audio:z.object({id:z.string()}).passthrough().optional(),video:z.object({id:z.string()}).passthrough().optional(),
   interactive:z.object({button_reply:z.object({id:z.string().max(256),title:z.string().max(256).optional()}).optional(),list_reply:z.object({id:z.string().max(256),title:z.string().max(256).optional()}).optional()}).optional(),
   button:z.object({payload:z.string().max(256),text:z.string().max(256).optional()}).optional(),
 });
@@ -47,6 +47,9 @@ export function normalizeWebhook(payload: unknown, expectedPhoneNumberId: string
       }
       const media=type==='document'?m.document:type==='image'?m.image:undefined;
       if(media) clean.media={id:media.id,mimeType:media.mime_type,...(media.sha256?{sha256:media.sha256}:{}),...(media.filename?{filename:media.filename}:{})};
+      // What the client wrote with the file is part of their message; it used to be dropped.
+      if(media?.caption?.trim()) clean.caption=media.caption.trim();
+      if(['audio','video','sticker','voice'].includes(m.type)) clean.unreadableMedia=m.type;
       messages.push(clean);
     }
     for(const raw of change.value.statuses ?? []) {

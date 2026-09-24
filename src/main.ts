@@ -16,7 +16,7 @@ const {redis,redlock}=createRedis(env.REDIS_URL);
 const queues=createQueues(redis,env.QUEUE_PREFIX);
 const adapterEnvironment={...process.env,KMALEON_CONFIG_FILE:env.KMALEON_CONFIG_FILE,APUDATA_CONFIG_FILE:env.APUDATA_CONFIG_FILE,SEDE_RECIPE_FILE:env.SEDE_RECIPE_FILE};
 const adapters=await loadConfiguredAdapters(adapterEnvironment);
-const whatsapp=env.SERVICE_MODE==='live'&&env.WHATSAPP_ENABLED&&env.WA_ACCESS_TOKEN&&env.WA_PHONE_NUMBER_ID?new WhatsAppClient({accessToken:env.WA_ACCESS_TOKEN,phoneNumberId:env.WA_PHONE_NUMBER_ID,apiVersion:env.WA_GRAPH_VERSION,transport:env.WHATSAPP_TRANSPORT,apiBaseUrl:env.WA_API_BASE_URL,writesEnabled:env.OUTBOUND_ENABLED,allowedRecipients:env.DEMO_DATA_ENABLED?env.DEMO_WHATSAPP_RECIPIENTS:undefined,maxMediaBytes:env.MAX_DOCUMENT_BYTES}):undefined;
+const whatsapp=env.SERVICE_MODE==='live'&&env.WHATSAPP_ENABLED&&env.WA_ACCESS_TOKEN&&env.WA_PHONE_NUMBER_ID?new WhatsAppClient({accessToken:env.WA_ACCESS_TOKEN,phoneNumberId:env.WA_PHONE_NUMBER_ID,apiVersion:env.WA_GRAPH_VERSION,transport:env.WHATSAPP_TRANSPORT,apiBaseUrl:env.WA_API_BASE_URL,writesEnabled:env.OUTBOUND_ENABLED,allowedRecipients:env.DEMO_DATA_ENABLED?env.DEMO_WHATSAPP_RECIPIENTS:undefined,maxMediaBytes:env.MAX_DOCUMENT_BYTES,...(process.env.WCE_MEDIA_DIR?{emulatorMediaDir:process.env.WCE_MEDIA_DIR}:{})}):undefined;
 const flow=new WorkflowService(prisma,redlock,new DocumentStorage(env.STORAGE_DIR,env.MAX_DOCUMENT_BYTES),env);
 const executor=new ActionExecutor(flow,adapters,whatsapp,queues);
 const server=await createServer(flow,executor,queues,redis);

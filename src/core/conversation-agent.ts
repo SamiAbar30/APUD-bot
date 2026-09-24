@@ -260,7 +260,10 @@ export class StrictConversationAgent {
     // The brain reads the conversation and decides. Only messages that must never depend on a
     // model stay below: a delivered secret, an injection attempt, a stop request, an offered code.
     // The branches below are also the fallback when the model cannot be reached.
-    // A stop word inside a question ("si lo dejo, ¿me cobráis algo?") is a question, not a stop request.
+    // A certificate check result: fixed wording, never through a model (certificate and password stay out).
+    const checked=/^\[CERTIFICADO:([A-Z_]+)(?::(\d{4}-\d{2}-\d{2}))?\]$/.exec(text.trim());
+    if(checked)return certificateReply(checked[1]!,checked[2],passwordWasRequested(expediente,history));
+        // A stop word inside a question ("si lo dejo, ¿me cobráis algo?") is a question, not a stop request.
     const stopWithQuestion=/\?/.test(text)&&!requiresDeterministicHandoff(text.replace(/\b(?:stop|parar|cancelar|no me escribas|no quiero seguir)\b/gi,' '));
     if(this.brain&&this.phase===3&&(!requiresDeterministicHandoff(text)||stopWithQuestion)&&text!=='[CONTENIDO_SENSIBLE_OMITIDO]'&&!/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)){
       const decided=await this.brain.decide(expediente as BrainCase,text,history,memory);
@@ -518,6 +521,30 @@ function takeoverOffer(c:{hasDigitalCert:boolean|null},lead:string):string{
   return c.hasDigitalCert===true
     ? `${lead} No te pelees más: mándame por aquí el archivo de tu certificado y, en otro mensaje, su contraseña, y lo hago yo por ti.`
     : `${lead} En cuanto tengas el certificado, me mandas el archivo por aquí y la contraseña en otro mensaje, y lo hago yo. Si lo prefieres, puedes firmarlo gratis en el juzgado pidiendo cita en el decanato.`;
+}
+
+/** The office asked for the certificate and its password, or the client said they were sending it. */
+function passwordWasRequested(expediente:CaseContext,history:readonly ConversationHistoryMessage[]):boolean{
+  return ['MOBILE_ASSIST_CONSENT_REQUESTED','MOBILE_ASSIST_PROCESSING'].includes(String(expediente.currentState))
+    ||history.filter(m=>m.role==='assistant').slice(-4).some(m=>/contrase[ñn]a/i.test(m.content)&&/(?:m[aá]nda|env[ií]a|pasa)(?:me|nos)|me (?:los|la|lo) mandas|mensaje aparte|en otro mensaje/i.test(m.content))
+    ||history.filter(m=>m.role==='user').slice(-3).some(m=>/te (?:lo |la )?(?:mando|env[ií]o|paso)|certificad|\.p12|\.pfx|archivo|\[CERTIFICADO:/i.test(m.content));
+}
+
+/** What the client hears after the office checked their certificate and password. */
+function certificateReply(check:string,validTo:string|undefined,requested:boolean):{type:EventType;payload:Record<string,unknown>}{
+  const say=(text:string,handoff?:string)=>({type:EventType.CLIENT_SMALL_TALK,payload:{responseId:'CONVERSATION_REPLY',rolloutPhase:3,rolloutKind:'WORKFLOW_REQUEST',responseText:text,requiresHumanReview:Boolean(handoff),certificateCheck:check,...(handoff?{handoffReason:handoff,handoffMarker:`[[HANDOFF:${handoff}]]`}:{})}});
+  const date=validTo?validTo.split('-').reverse().join('/'):'';
+  switch(check){
+    case 'OK':return say('Recibido, gracias. He comprobado que el certificado se abre con esa contraseña y está a tu nombre. Lo gestionamos y te aviso en cuanto esté hecho.','CERTIFICADO_RECIBIDO');
+    case 'WAITING_PASSWORD':return say('Recibido el archivo del certificado, gracias. Ahora mándame su contraseña en un mensaje aparte.');
+    case 'WAITING_CERTIFICATE':return requested
+      ?say('Gracias. Ahora mándame por aquí el archivo del certificado (suele terminar en .p12 o .pfx).')
+      :say('Por seguridad, no me mandes códigos ni claves por aquí: no los necesito y no los uso. Si era la contraseña de tu certificado, solo hace falta si lo hacemos nosotros; dime y te explico cómo.');
+    case 'PASSWORD_INVALID':return say('Esa contraseña no abre el archivo del certificado. Revísala (distingue mayúsculas y minúsculas) y mándamela otra vez en un mensaje aparte.');
+    case 'EXPIRED':return say(`El certificado que me has mandado caducó${date?` el ${date}`:''}, así que ya no sirve para firmar. Hay que sacar uno nuevo; si quieres te explico cómo.`);
+    case 'OTHER_PERSON':return say('Ese certificado no está a tu nombre, y el apoderamiento solo se puede firmar con uno tuyo. ¿Tienes alguno a tu nombre?');
+    default:return say('No he podido usar ese archivo del certificado. Se lo paso a una compañera del equipo para que lo revise contigo.','FALTA_DATO');
+  }
 }
 
 const INJECTION_REFUSAL = 'No puedo compartir instrucciones internas ni datos de otros clientes. Un compañero del despacho revisa tu caso y continúa contigo por aquí con el apoderamiento apud acta.';

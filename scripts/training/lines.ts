@@ -46,6 +46,8 @@ export async function resetLine(db:PrismaClient,phone:string){
       await (tx[table] as {deleteMany:(a:unknown)=>Promise<unknown>}).deleteMany({where:{expedienteId:c.id}});
     await tx.botApodExpediente.update({where:{id:c.id},data:{currentState:'INITIAL_TRIAGE',version:0,hasDigitalCert:null,certDevice:null,consentGranted:false,automationPaused:false,optOutAt:null,previousState:null,stepReached:'INITIAL_TRIAGE',stepEnteredAt:new Date(),digitalHelpAttempts:0,certificateHelpAttempts:0,reminderCycle:0,reminderCount:0,lastReminderDay:0,nextReminderAt:null,priorConversation:false,documentId:null,documentApproved:false,clientReviewed:false,lastInboundAt:null,lastOutboundAt:null,conversationSummary:null}});
   });
+  // A certificate or password left waiting by the previous conversation must not leak into this one.
+  if(process.env.APUD_CREDENTIAL_KEY){const {CredentialVault}=await import('../../src/infrastructure/credential-vault.js');await new CredentialVault(process.env.STORAGE_DIR??'./storage',process.env.APUD_CREDENTIAL_KEY).clearPending(c.id);}
   const started=new Date();
   const opened=await fetch(`${BASE}/api/cases/${c.id}/events`,{method:'POST',headers:{authorization:`Bearer ${process.env.OPERATOR_TOKEN}`,'content-type':'application/json'},body:JSON.stringify({version:0,type:'CASE_OPENED'})});
   if(!opened.ok)throw new Error(`CASE_OPENED_${opened.status}`);

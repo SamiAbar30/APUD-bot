@@ -15,6 +15,7 @@ import { FOLLOW_UP_STATES, stepFor, nextFollowUp } from './follow-up.js';
 import { closePhaseOne, phaseOneExpired } from './phase-one.js';
 import { phaseOneReportedOutcome } from './phase-one-intent.js';
 import type { StrictConversationAgent } from './conversation-agent.js';
+import { certificateMarker, type AttachmentIntake } from './attachment-intake.js';
 import { requiresDeterministicHandoff } from './conversation-policy.js';
 import { relatedConversationText } from './conversation-batching.js';
 
@@ -22,6 +23,7 @@ export const json = (value:unknown):Prisma.InputJsonValue => JSON.parse(JSON.str
 export type WorkflowPatch = Prisma.BotApodExpedienteUpdateManyMutationInput;
 export class WorkflowService {
   conversationAgent?:StrictConversationAgent;
+  attachmentIntake?:AttachmentIntake;
   constructor(readonly db:PrismaClient,readonly redlock:Redlock,readonly storage:DocumentStorage,readonly env:Env) {}
   async locked<T>(id:string,fn:(signal:{aborted:boolean})=>Promise<T>):Promise<T>{return this.redlock.using([`lock:apod:${id}`],180000,fn);}
   async load(id:string):Promise<BotApodExpediente>{const c=await this.db.botApodExpediente.findUnique({where:{id}});if(!c)throw new AppError('CASE_NOT_FOUND',404);return c;}
@@ -200,6 +202,23 @@ export class WorkflowService {
     return this.redlock.using([`lock:apod-inbox:${id}`],180000,async inboxSignal=>{
 
     // Media processing takes its own lock. Durable per-message statuses make recovery explicit.
+    // Files first: each is identified by its content and becomes a line of the conversation (or, for
+    // the apud acta justificante, goes on to the PDF audit) before the turn is read.
+    if(this.attachmentIntake){
+      const media=await this.db.botApodInbox.findMany({where:{expedienteId:id,status:'PENDING',eventType:'MEDIA_RECEIVED',notBefore:{lte:new Date()}},orderBy:[{createdAt:'asc'},{id:'asc'}],take:10});
+      if(media.length){
+        const c=await this.load(id);
+        for(const row of media){
+          const payload=row.payload as Record<string,unknown>;
+          const result=await this.attachmentIntake.read({id:c.id,dni:c.dni},payload);
+          await this.db.$transaction(async tx=>{
+            await tx.botApodMessage.upsert({where:{externalId:row.externalId},create:{expedienteId:id,externalId:row.externalId,role:'user',content:result.marker.slice(0,2000),source:'WHATSAPP',createdAt:row.createdAt},update:{}});
+            await tx.botApodInbox.update({where:{id:row.id},data:result.route==='APUD_PDF'?{eventType:'PDF_MEDIA'}:{eventType:'CONVERSATION_TEXT',payload:json({...payload,text:result.marker})}});
+            await tx.botApodAuditLog.create({data:{expedienteId:id,event:'ATTACHMENT_READ',operator:'WHATSAPP_CLIENT',metadata:json({inboxId:row.id,route:result.route,...(result.route==='CERTIFICATE'?{check:result.check}:{})})}});
+          });
+        }
+      }
+    }
     const pending=await this.db.botApodInbox.findMany({where:{expedienteId:id,status:'PENDING'},orderBy:[{createdAt:'asc'},{id:'asc'}],take:50});
     // Anything already waiting is backlog, not a new arrival: with more than one page of pending
     // texts the old "outside this page" test discarded every draft and stalled the case for good.
@@ -233,7 +252,7 @@ export class WorkflowService {
         // With the brain, a burst is read whole: a stop word or an odd request is judged with the rest of
         // what the client wrote (training round 9: "ya no quiero seguir" answered as a stop while its
         // question arrived as a separate turn). Only a message carrying a secret stays on its own.
-        const carriesSecret=(value:string)=>/CONTENIDO_SENSIBLE|REDACTADA/.test(value);
+        const carriesSecret=(value:string)=>/CONTENIDO_SENSIBLE|REDACTADA|^\[CERTIFICADO:/.test(value);
         const burstable=(value:string)=>this.conversationAgent?.readsWholeBursts?!carriesSecret(value):!requiresDeterministicHandoff(value);
         if(fresh.eventType==='CONVERSATION_TEXT'&&burstable(String((fresh.payload as Record<string,unknown>).text??''))){
           let size=String((fresh.payload as Record<string,unknown>).text??'').length;
@@ -289,7 +308,13 @@ export class WorkflowService {
           // An accepted opening receipt works for both transports, across all history.
           const sentOpening=await this.db.botApodAccion.findFirst({where:{expedienteId:id,status:{in:['AWAITING_DELIVERY','EXECUTED']},receipt:{path:['template'],equals:'ASK_HAS_CERT'}},select:{id:true}});
           const introduction=sentOpening??await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',OR:[{content:'Plantilla aprobada: ASK_HAS_CERT'},{AND:[{content:{contains:'LITIGIOS'}},{content:{contains:'apoderamiento apud acta'}}]}]},select:{id:true}});
-          const text=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')).join('\n');
+          let text=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'')).join('\n');
+          // A password that just arrived is checked against the certificate waiting for it.
+          if(this.attachmentIntake&&text.trim()==='[CONTENIDO_SENSIBLE_OMITIDO]'){
+            const checked=await this.attachmentIntake.checkPair({id:c.id,dni:c.dni});
+            text=certificateMarker(checked.check,checked.validTo);
+            await this.db.botApodAuditLog.create({data:{expedienteId:id,event:'CERTIFICATE_CHECKED',operator:'WHATSAPP_CLIENT',metadata:json({check:checked.check})}});
+          }
           // Durable memory beyond the recent window: the client may be answering days later.
           const older=await this.db.botApodMessage.findMany({where:{expedienteId:id,id:{notIn:history.map(m=>m.id)},externalId:{notIn:turnRows.map(x=>x.externalId)},createdAt:{lt:sourceMessage?.createdAt??row.createdAt}},orderBy:[{createdAt:'desc'},{id:'desc'}],take:200});
           const memory=historicalCaseMemory(older.reverse(),text);

@@ -36,6 +36,10 @@ const values = {
   // The simulator answers as soon as the tester stops typing. Production keeps the 60s default,
   // where the wait is what lets a burst of client messages be read as one turn.
   CONVERSATION_QUIET_MS: source.CONVERSATION_QUIET_MS || '1000',
+  // Encrypts certificates and passwords clients send over WhatsApp; generated once and kept.
+  APUD_CREDENTIAL_KEY: source.APUD_CREDENTIAL_KEY || previous.APUD_CREDENTIAL_KEY || randomBytes(32).toString('hex'),
+  // Files the simulated clients "send": the emulator has no media server, so they are read from here.
+  WCE_MEDIA_DIR: source.WCE_MEDIA_DIR || '.runtime/wce-media',
   CONVERSATION_BRAIN: source.CONVERSATION_BRAIN || 'on', BRAIN_MODEL: source.BRAIN_MODEL || '', BRAIN_REASONING_EFFORT: source.BRAIN_REASONING_EFFORT || '',
   GEMINI_API_KEY: source.GEMINI_API_KEY || '', ANTHROPIC_API_KEY: source.ANTHROPIC_API_KEY || '', APOD_AGENT_PACKAGE_DIR: source.APOD_AGENT_PACKAGE_DIR || '',
   APOD_MASTER_PROMPT_FILE:source.APOD_MASTER_PROMPT_FILE||'docs/source/apud_acta_master_prompt.md',APOD_AGENT_EVAL_REPORT:source.APOD_AGENT_EVAL_REPORT||'evidence/agent-evaluations.json',

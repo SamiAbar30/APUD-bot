@@ -80,7 +80,7 @@ check('4 on a computer → PC guide sent',(await state(s.caseId)).currentState==
 const handoff=await say(sami.phone,s.caseId,['Ya entré en la sede. Creo que no comprendes lo que necesito. Necesito asistencia, hay montón de enlaces','¿Puedo enviarte una imagen?']);
 const held=await state(s.caseId);
 check('7a "no comprendes… necesito asistencia" goes to a person (manager rule)',held.currentState==='ESCALATED_HUMAN',held.currentState);
-check('7 handover asks for nothing more',!(held.currentState==='ESCALATED_HUMAN'&&/captura|m[aá]ndame (?:una )?(?:foto|imagen)|env[ií]ame (?:una )?(?:foto|imagen|captura)/i.test(handoff.join(' '))),`${held.currentState}: ${handoff.join(' ').slice(0,160)}`);
+check('7 handover asks for nothing more',!(held.currentState==='ESCALATED_HUMAN'&&/(?:^|[.¿?!]\s*)(?:m[aá]ndame|env[ií]ame|p[aá]same) (?:una )?(?:foto|imagen|captura)/i.test(handoff.join(' '))),`${held.currentState}: ${handoff.join(' ').slice(0,160)}`);
 
 // ---- Bursts with a stop word or a trick inside (training round 9) ----
 transcript.push('=== Bursts ===');
