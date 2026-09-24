@@ -6,6 +6,14 @@ import { TemplateId, type TemplateVariables } from '../domain/fsm/actions.js';
 import type { ReplyButtonId } from '../contracts/whatsapp.contract.js';
 import { PARTNER_COST } from './conversation-guidance.js';
 
+/**
+ * Reply when the client picks the paid partner route and the partner integration can't take it
+ * (APUD_VERSION=1): a person continues. Follows what the team writes in that moment (140 real
+ * conversations): price, paid before starting, which ID they have, what happens next, and the free
+ * court route kept open. Never bank details: the colleague sends those.
+ */
+export const PAID_ROUTE_HANDOFF_TEXT='Perfecto. La empresa colaboradora te hace todo el apoderamiento por 35 €, que se pagan antes de empezar (no se descuentan al final).\n\nPara que no pagues por nada, dime: ¿tienes DNI, o NIE en tarjeta física?\n\nUna compañera del despacho te escribe por aquí con los datos para el pago. Cuando lo hagas, te llega un enlace para terminarlo desde el móvil con tu DNI o NIE, y si te atascas hay soporte técnico que te ayuda.\n\nSi al final prefieres no pagar, en el juzgado sigue siendo gratis.';
+
 export interface OutgoingGuide {
   text:string;
   buttons?:{id:ReplyButtonId;title:string}[];

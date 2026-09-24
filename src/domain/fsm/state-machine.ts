@@ -1015,7 +1015,8 @@ const apudataPendingPreapproval: Handler = (ctx) => {
       });
     case EventType.APUDATA_PREAPPROVAL_FAILED:
     case EventType.APUDATA_FAILED:
-      return escalate(ctx, EscalationReason.APUDATA_FAILED, 'MEDIUM', `Partner call failed (${String(ctx.payload.errorCode)})`);
+      // The client just chose the paid route and is waiting: always tell them a person continues.
+      return escalate(ctx, EscalationReason.APUDATA_FAILED, 'MEDIUM', `Partner call failed (${String(ctx.payload.errorCode)})`, { clientNotice: TemplateId.HUMAN_HANDOFF_NOTICE });
     case EventType.REMINDER_DUE:
       return hold(ctx, AwaitingParty.NONE, 'Partner eligibility check in progress: no client reminder', { blocking: [BlockingCondition.FINANCIAL_GATE_CLOSED] });
     default:
