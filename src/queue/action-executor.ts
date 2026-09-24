@@ -9,7 +9,7 @@ import { ApudataApprovalSchema } from '../contracts/apudata.contract.js';
 import type { DocumentProof } from '../contracts/kmaleon.contract.js';
 import { AppError, errorCode, requireOutbound } from '../infrastructure/security.js';
 import { WorkflowService, json, type WorkflowPatch } from '../core/workflow-service.js';
-import { messageForCase } from '../core/messages.js';
+import { messageForCase, PAID_ROUTE_HANDOFF_TEXT } from '../core/messages.js';
 import type { TemplateVariables } from '../domain/fsm/actions.js';
 import { courtChecklist, tutorialWithRoster } from '../core/guides.js';
 import { approvedTemplate } from '../core/approved-template.js';
@@ -59,7 +59,13 @@ export class ActionExecutor {
         await this.flow.db.$transaction(tx=>closePhaseOne(tx,currentCase,'DEADLINE_REACHED',{source:'OUTBOX_DEADLINE_CHECK'}));return;
       }
       if(!reconcileOnly&&(currentCase.phaseOneClosedAt||this.flow.env.APUD_VERSION===1&&['TRIGGER_SEDE_AUTOMATION','CALL_APUDATA_PREAPPROVAL','UPLOAD_KMALEON_DOCUMENT','CREATE_KMALEON_AVISO','NOTIFY_DAYANA'].includes(action.actionType))){
-        await this.flow.db.botApodAccion.update({where:{id},data:{status:'CANCELLED',lastError:currentCase.phaseOneClosedAt?'PHASE_ONE_CLOSED':'APUD_V2_REQUIRED'}});return;
+        await this.flow.db.botApodAccion.update({where:{id},data:{status:'CANCELLED',lastError:currentCase.phaseOneClosedAt?'PHASE_ONE_CLOSED':'APUD_V2_REQUIRED'}});
+        // The client picked the paid route and waits for an answer: without the partner integration a
+        // person takes it (bank details come from them, never from the bot). Cancelling alone left the
+        // client with no reply and the case stuck in APUDATA_PENDING_PREAPPROVAL (live test 24 Sep).
+        if(!currentCase.phaseOneClosedAt&&action.actionType==='CALL_APUDATA_PREAPPROVAL'&&currentCase.currentState==='APUDATA_PENDING_PREAPPROVAL'&&!currentCase.optOutAt)
+          await this.flow.db.$transaction(tx=>this.flow.transition(tx,currentCase,'APUDATA_PREAPPROVAL_FAILED',{errorCode:'APUD_V2_REQUIRED',requiresHumanReview:true,handoffReason:'PAGO',responseText:PAID_ROUTE_HANDOFF_TEXT}));
+        return;
       }
       const actionPayload=action.payload as Record<string,unknown>;
       const isReminder=typeof actionPayload.reminderDay==='number';
