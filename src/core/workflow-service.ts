@@ -16,6 +16,7 @@ import { closePhaseOne, phaseOneExpired } from './phase-one.js';
 import { phaseOneReportedOutcome } from './phase-one-intent.js';
 import type { StrictConversationAgent } from './conversation-agent.js';
 import { certificateMarker, CERTIFICATE_CHECK_WORDS, type AttachmentIntake } from './attachment-intake.js';
+import { neutralizeSystemMarkers } from '../adapters/whatsapp/webhook-router.js';
 import { requiresDeterministicHandoff } from './conversation-policy.js';
 import { relatedConversationText } from './conversation-batching.js';
 
@@ -215,7 +216,7 @@ export class WorkflowService {
             // The conversation keeps a readable line; the certificate code stays in the turn text only.
             const said=result.route==='CERTIFICATE'?`[Adjunto del cliente: el archivo de su certificado digital. Comprobación del sistema: ${CERTIFICATE_CHECK_WORDS[result.check]}.]`:result.marker;
             await tx.botApodMessage.upsert({where:{externalId:row.externalId},create:{expedienteId:id,externalId:row.externalId,role:'user',content:said.slice(0,2000),source:'WHATSAPP',createdAt:row.createdAt},update:{}});
-            await tx.botApodInbox.update({where:{id:row.id},data:result.route==='APUD_PDF'?{eventType:'PDF_MEDIA'}:{eventType:'CONVERSATION_TEXT',payload:json({...payload,text:result.marker})}});
+            await tx.botApodInbox.update({where:{id:row.id},data:result.route==='APUD_PDF'?{eventType:'PDF_MEDIA'}:{eventType:'CONVERSATION_TEXT',payload:json({...payload,text:result.marker,systemNote:true})}});
             await tx.botApodAuditLog.create({data:{expedienteId:id,event:'ATTACHMENT_READ',operator:'WHATSAPP_CLIENT',metadata:json({inboxId:row.id,route:result.route,...(result.route==='CERTIFICATE'?{check:result.check}:{})})}});
           });
         }
@@ -313,11 +314,13 @@ export class WorkflowService {
           // An accepted opening receipt works for both transports, across all history.
           const sentOpening=await this.db.botApodAccion.findFirst({where:{expedienteId:id,status:{in:['AWAITING_DELIVERY','EXECUTED']},receipt:{path:['template'],equals:'ASK_HAS_CERT'}},select:{id:true}});
           const introduction=sentOpening??await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',OR:[{content:'Plantilla aprobada: ASK_HAS_CERT'},{AND:[{content:{contains:'LITIGIOS'}},{content:{contains:'apoderamiento apud acta'}}]}]},select:{id:true}});
-          const parts=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'').trim());
+          // Only rows the attachment intake wrote may carry the bot's own notes; client text is
+          // neutralised again here, on top of the webhook reader (defence in depth).
+          const parts=turnRows.map(x=>{const p=x.payload as Record<string,unknown>;const value=String(p.text??'').trim();return p.systemNote===true||value==='[CONTENIDO_SENSIBLE_OMITIDO]'?value:neutralizeSystemMarkers(value);});
           let text=parts.join('\n');
           // A certificate read in this burst already includes any password that came with it (the
           // pair was checked when the file was read); checking again would find the slots cleared.
-          const certificate=[...parts].reverse().find(p=>/^\[CERTIFICADO:[A-Z_]+/.test(p));
+          const certificate=[...turnRows].reverse().filter(x=>(x.payload as Record<string,unknown>).systemNote===true).map(x=>String((x.payload as Record<string,unknown>).text??'').trim()).find(p=>/^\[CERTIFICADO:[A-Z_]+/.test(p));
           if(certificate)text=certificate;
           else if(parts.some(p=>p==='[CONTENIDO_SENSIBLE_OMITIDO]'))text='[CONTENIDO_SENSIBLE_OMITIDO]';
           // A password that just arrived is checked against the certificate waiting for it.
