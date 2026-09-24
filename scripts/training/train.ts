@@ -16,7 +16,8 @@ import {createHash} from 'node:crypto';
 import {PrismaClient} from '@prisma/client';
 import {conversationAiFromEnv} from '../../src/config/conversation-ai.js';
 import {PERSONAS,type Persona} from './personas.js';
-import {seedTrainingLines,resetLine,clearQueueFor,sendText,officeReplies,tapButton,deliveryFailed,sentIds,buttonsOnScreen} from './lines.js';
+import {TEST_CERT_PASSWORD} from './make-test-certificates.js';
+import {seedTrainingLines,resetLine,clearQueueFor,sendText,officeReplies,tapButton,deliveryFailed,sentIds,buttonsOnScreen,sendFile,trainingFiles,SCREEN_LABELS} from './lines.js';
 
 const arg=(name:string)=>process.argv.find(a=>a.startsWith(`--${name}=`))?.split('=').slice(1).join('=');
 const round=arg('round')??new Date().toISOString().slice(0,16).replace(/[:T]/g,'-');
@@ -66,7 +67,7 @@ async function corpusPersonas():Promise<Persona[]>{
     goal:'Lo que este cliente quería según sus mensajes.'}));
 }
 
-type ClientMove={texts:string[];button?:string;done:boolean;why:string;text?:string};
+type ClientMove={texts:string[];button?:string;file?:string;done:boolean;why:string;text?:string};
 async function simulateClient(p:Persona,transcript:Line[],screen:{current:string[];older:string[]}):Promise<ClientMove>{
   if(transcript.filter(l=>l.who==='cliente').length===0&&p.openWith)return {texts:[p.openWith],done:false,why:''};
   const out=await chatJson(SIM_MODEL,`Eres un cliente de un despacho de abogados español hablando por WhatsApp con su asistente virtual sobre el "apoderamiento apud acta" de tu reclamación. Juegas un papel; nunca reveles que eres una simulación.
@@ -75,14 +76,16 @@ Tu forma de ser y escribir: ${p.behaviour}
 Lo que quieres conseguir: ${p.goal}
 Reglas: escribe como en WhatsApp real, normalmente una o dos frases cortas, en español salvo que tu papel diga otra cosa. Reacciona a lo que te acaban de decir: si te dan un paso, lo intentas y cuentas qué pasa según tus hechos. Si te repiten lo mismo o no te entienden, muestra frustración como lo haría una persona. No puedes enviar archivos ni imágenes; si tuvieras que mandar un archivo, di que lo mandas y termina.\nSi estás en la Sede Judicial, lo que ves en pantalla es lo de esta guía oficial; no inventes pantallas, campos ni datos que la Sede pida fuera de ella:\n${SEDE_SCREENS}
 Como en WhatsApp real: a veces partes lo que dices en varios mensajes cortos seguidos ("Vale" / "Dame un segundo" / "ya está"), y cuando el último mensaje trae botones a menudo contestas pulsando uno en vez de escribir. Muy de vez en cuando, por despiste, pulsas un botón de un mensaje anterior.
+También puedes mandar un archivo, como hace la gente real: "captura:N" (una captura de la pantalla de la Sede en la que estás; N es el número de la pantalla de esta lista que corresponde a donde estás: ${SCREEN_LABELS.map((d,i)=>`${i+1}) ${d}`).join(' ')}), "certificado" (el archivo de tu certificado, solo si tienes uno y decides mandarlo), "guia" (el PDF de la guía que te mandaron, por ejemplo creyendo que es lo que hay que devolver), "nota_de_voz" (un audio en vez de escribir). La contraseña de tu certificado, si lo mandas, es ${TEST_CERT_PASSWORD} (escríbela en un mensaje aparte, o equivócate la primera vez si tu papel es despistado).
 Botones del último mensaje: ${screen.current.length?screen.current.join(' | '):'(ninguno)'}.
 Botones de mensajes anteriores: ${screen.older.length?screen.older.join(' | '):'(ninguno)'}.
 Termina ("fin": true) cuando: consigues tu objetivo, te dicen que te atiende una persona y ya no hay más que decir, te despides, o llevas varios mensajes sin avanzar y lo dejas.
-Devuelve SOLO JSON: {"mensajes":["uno o varios mensajes cortos que envías seguidos (vacío si pulsas un botón o si fin)"],"boton":"título exacto del botón que pulsas, o vacío","fin":true|false,"motivo":"por qué terminas (si fin)"}`,
+Devuelve SOLO JSON: {"mensajes":["uno o varios mensajes cortos que envías seguidos (vacío si pulsas un botón o si fin)"],"boton":"título exacto del botón que pulsas, o vacío","archivo":"captura:N|certificado|guia|nota_de_voz o vacío","fin":true|false,"motivo":"por qué terminas (si fin)"}`,
     `Conversación hasta ahora:\n${show(transcript)}\n\nEscribe tu siguiente movimiento como el cliente.`);
   const texts=(Array.isArray(out.mensajes)?out.mensajes:[out.mensaje]).map(t=>String(t??'').trim()).filter(Boolean).slice(0,5);
   const button=String(out.boton??'').trim()||undefined;
-  return {texts,...(button?{button}:{}),done:out.fin===true||(!texts.length&&!button),why:String(out.motivo??'')};
+  const file=/^(?:captura(?::\d+)?|certificado|guia|nota_de_voz)$/.test(String(out.archivo??''))?String(out.archivo):undefined;
+  return {texts,...(button?{button}:{}),...(file?{file}:{}),done:out.fin===true||(!texts.length&&!button&&!file),why:String(out.motivo??'')};
 }
 
 async function judge(p:Persona,transcript:Line[],finalState:string,document:string){
@@ -99,7 +102,7 @@ Criterios de la revisión (1 a 5 cada uno):
 - sigue_el_punto: sabe en qué punto está el cliente y da el siguiente paso concreto desde ahí; no vuelve a preguntar lo ya dicho (una respuesta con [botón] cuenta como dicha).
 - no_repite: no repite mensajes ni ideas que ya no funcionaron; cambia de enfoque.
 - respeta_decisiones: si el cliente dice que no comparte su certificado o que prefiere hacerlo él, lo respeta y le ayuda en eso.
-- exactitud: todo lo que dice cumple el manual (enlaces, precios, pasos, seguridad); no inventa nada.
+- exactitud: todo lo que dice cumple el manual (enlaces, precios, pasos, seguridad); no inventa nada. Si el cliente manda un archivo, la respuesta tiene que corresponder a lo que era (una captura de la Sede, su certificado, la guía en vez del justificante, una nota de voz).
 - traspaso: pasa a una persona cuando hace falta (el cliente lo pide, no le entiende, se atasca repetidamente, casos delicados) y no cuando no hace falta.
 - humano: suena a una persona del despacho por WhatsApp: breve, natural, cálida, sin fórmulas repetidas.
 Tras un traspaso, el sistema envía como mucho un acuse breve ('Gracias, lo tengo apuntado…') y luego calla: es lo previsto. Tras un traspaso a una persona, que la asistente deje de contestar es lo correcto: la conversación sigue con una persona. Juzga si el traspaso fue oportuno, no el silencio posterior.
@@ -129,6 +132,7 @@ function mechanicalProblems(transcript:Line[]):string[]{
 
 const db=new PrismaClient();
 const lines=await seedTrainingLines(db);
+const files=await trainingFiles(db,lines);
 if(!lines.length)throw new Error('NO_TRAINING_LINES: restart the stack so setup-wce allowlists them');
 const personas=[...PERSONAS.filter(p=>!only||only.includes(p.id)),...(only?[]:await corpusPersonas())];
 console.log(JSON.stringify({round,personas:personas.length,lines:lines.length,sim:SIM_MODEL,judge:JUDGE_MODEL}));
@@ -171,9 +175,10 @@ async function run(p:Persona,line:typeof lines[number]):Promise<Result>{
     const before=new Date();
     const pressed=next.button?[current,...[...older].reverse()].flatMap(x=>x?x.buttons.map(b=>({...b,messageId:x.messageId})):[]).find(b=>b.title.toLowerCase()===next.button!.toLowerCase()):undefined;
     if(pressed){await tapButton(line.phone,pressed.id,pressed.title,pressed.messageId);transcript.push({who:'cliente',text:`[botón] ${pressed.title}${pressed.messageId!==current?.messageId?' (de un mensaje anterior)':''}`});}
+    if(next.file){await sendFile(line.phone,next.file,files.get(line.phone)!);transcript.push({who:'cliente',text:`[${next.file.startsWith('captura')?`envía una captura de la Sede: ${SCREEN_LABELS[(Number(next.file.split(':')[1])||1)-1]??''}`:next.file==='certificado'?'envía el archivo de su certificado':next.file==='guia'?'envía el PDF de la guía':'envía una nota de voz'}]`});}
     for(const text of next.texts){await sendText(line.phone,text);transcript.push({who:'cliente',text});await new Promise(r=>setTimeout(r,150));}
-    if(!pressed&&!next.texts.length){end='cliente: botón inexistente';break;}
-    next.text=[pressed?.title,...next.texts].filter(Boolean).join(' / ');
+    if(!pressed&&!next.texts.length&&!next.file){end='cliente: botón inexistente';break;}
+    next.text=[pressed?.title,next.file?`[${next.file}]`:undefined,...next.texts].filter(Boolean).join(' / ');
     const replies=await officeReplies(db,caseId,before);
     const audits=await db.botApodAuditLog.findMany({where:{expedienteId:caseId,createdAt:{gt:before}},orderBy:{createdAt:'asc'},select:{event:true,fromState:true,toState:true,metadata:true}});
     traces.push(`T${turn+1} «${next.text.slice(0,60)}» → `+(audits.map(a=>{const e=((a.metadata as {evidence?:Record<string,unknown>}|null)?.evidence)??{};return `${a.event} ${a.fromState}→${a.toState}${e.brainUnderstanding?` | entiende: ${e.brainUnderstanding}`:''}${e.brainNote?` | nota: ${e.brainNote}`:''}${e.brainLead?' | con frase previa':''}`;}).join(' ; ')||'sin evento'));

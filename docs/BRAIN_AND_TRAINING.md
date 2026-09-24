@@ -70,6 +70,18 @@ ENV_FILE=.env.wce npx tsx scripts/training/replay.ts [file]         # word-for-w
 | 7 | 41/46 (89%) | side question answered before any workflow step; iPhone app wording |
 | 7b (the 8 hardest, rerun) | 6/8 | — |
 | 8 — bot on `gpt-6-luna` (same clients as round 7) | 44/46 (95.7%) | model switch only (`AI_MODEL` in `.env`) |
+| 9 — clients tap buttons, send bursts, 1 in 4 openings refused | 43/48 (89.6%) | stated facts kept on the case; bursts read whole except secrets |
+| 10 — same, 13 button taps | 44/48 (91.7%) | help buttons answered by the brain; "no me comprendes" → person |
+
+### First live WhatsApp test (23 Sep) and what it changed
+The live report (`../REPORT-live-whatsapp-test-2026-09-23.md`) found failures the text-only training
+could not reach: button taps missing from the chat, "no computer" not moving the case, old buttons
+accepted, no PDF guide from the phone steps, a refused opening still counted as said, bursts split
+into two replies, and a mixed handover message. All are fixed and checked live by
+`scripts/training/replay-live-findings.ts` (13 checks, including bursts with a stop word or a trick
+inside, and the help button), plus `scripts/test-live-findings-23sep.ts`. The training loop now
+simulates what those testers did: button taps (sometimes on an older message), bursts, and
+openings refused by Meta.
 
 Single-message coverage on real client messages (`eval-hard-cases`, no conversation history):
 70% → 76.7% on both seed 11 and seed 7 after the stuck-offer rule; the rule-based bot scored 80.8% on the same test,

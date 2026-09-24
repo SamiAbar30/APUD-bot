@@ -116,7 +116,7 @@ const ALL_POWER_KEYS: string[] = REQUIRED_POWERS.map((p) => p.key);
 const NAME_PARTICLES: ReadonlySet<string> = new Set(['de', 'del', 'la', 'las', 'los', 'y', 'e', 'da', 'do', 'dos', 'das', 'van', 'von', 'di', 'san']);
 const PDF_MAGIC = Buffer.from('%PDF-', 'latin1');
 
-interface Extraction {
+export interface Extraction {
   pageCount: number;
   text: string;
   pagesScanned: number;
@@ -135,6 +135,11 @@ function classifyPdfjsError(error: unknown): AuditReason {
   if (name === 'PasswordException' || message.includes('password')) return AuditReason.ENCRYPTED;
   if (name === 'InvalidPDFException' || name === 'FormatError' || name === 'MissingPDFException' || message.includes('invalid pdf')) return AuditReason.PARSE_FAILED;
   return AuditReason.PARSE_FAILED;
+}
+
+/** Text layer of a PDF, shared with the attachment intake that decides what a received PDF is. */
+export async function extractPdfText(bytes: Uint8Array, timeoutMs: number): Promise<Extraction> {
+  return extractText(bytes, timeoutMs);
 }
 
 async function extractText(bytes: Uint8Array, timeoutMs: number): Promise<Extraction> {

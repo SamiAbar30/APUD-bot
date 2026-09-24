@@ -17,6 +17,10 @@ export interface WhatsAppInboundMessage {
   type: 'text' | 'document' | 'image' | 'interactive' | 'button' | 'unsupported';
   textPresent: boolean; text?: string; contextId?: string; buttonId?: ReplyButtonId; buttonTitle?: string;
   media?: {id: string; mimeType: string; sha256?: string; filename?:string};
+  /** Text the client wrote with a document or image. */
+  caption?: string;
+  /** A voice note, video or sticker: nothing the office can read. */
+  unreadableMedia?: string;
 }
 export interface WhatsAppStatus {
   id: string; recipientId: string; timestamp: number;

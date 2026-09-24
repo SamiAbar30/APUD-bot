@@ -251,7 +251,7 @@ export function checkReply(text: string, history: readonly ConversationHistoryMe
   if (/\b(?:ya (?:tenemos|hemos recibido|he recibido)|(?:hemos|he) (?:presentado|registrado|revisado y validado))\b.{0,50}(?:apoderamiento|apud|pdf|justificante|demanda)/.test(n))
     return 'No digas que algo está recibido o presentado: no te consta.';
   // The brain only sees text: a file the client says they sent is not a file we received.
-  if (/gracias por (?:enviarl[oa]|mandarl[oa]|envi[aá]rmel[oa]|mand[aá]rmel[oa]|enviarnosl[oa]|mandarnosl[oa])|ya (?:lo |la )?tenemos|(?<!no )(?:nos|me) ha llegado/.test(n))
+  if (!/\[Adjunto del cliente/.test(clientText) && /gracias por (?:enviarl[oa]|mandarl[oa]|envi[aá]rmel[oa]|mand[aá]rmel[oa]|enviarnosl[oa]|mandarnosl[oa])|ya (?:lo |la )?tenemos|(?<!no )(?:nos|me) ha llegado/.test(n))
     return 'No sabes si ha llegado ningún archivo: solo ves texto. No lo agradezcas como recibido; di que por aquí aún no te ha llegado y pide que adjunte el PDF en este chat.';
   if (/(?:soy|me llamo) (?:una persona|humana|la abogada)|no soy (?:un bot|una ia|virtual)/.test(n)) return 'No digas que eres una persona: eres la asistente virtual.';
   const previous = history.filter(m => m.role === 'assistant').slice(-8).map(m => normalize(m.content));

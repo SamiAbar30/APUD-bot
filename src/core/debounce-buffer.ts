@@ -11,13 +11,16 @@ export class DebounceBuffer {
     let row;
     try{row=await this.db.$transaction(async tx => {
       // Text waits for a quiet client; buttons/media keep their short processing delay.
-      const now = new Date(); const notBefore = new Date(now.getTime()+(input.eventType==='CONVERSATION_TEXT'?this.quietMs:input.eventType==='CLIENT_OPT_OUT'?0:4000));
+      const now = new Date(); // A file is part of what the client is saying: it waits for the same pause as text, so a
+      // screenshot and "¿y aquí qué?" are read as one turn (training round 11).
+      const conversational=input.eventType==='CONVERSATION_TEXT'||input.eventType==='MEDIA_RECEIVED';
+      const notBefore = new Date(now.getTime()+(conversational?this.quietMs:input.eventType==='CLIENT_OPT_OUT'?0:4000));
       const {conversationText,...inbox}=input;
       // Serialize arrival with the worker's final stale-burst check, not its model call.
       if(input.expedienteId)await tx.$queryRaw`SELECT id FROM bot_apod_expedientes WHERE id = ${input.expedienteId} FOR UPDATE`;
       const row = await tx.botApodInbox.create({data:{...inbox,source:input.source??'WHATSAPP',notBefore,status:input.expedienteId?'PENDING':'UNMATCHED'}});
       if (input.expedienteId) {
-        if(input.eventType==='CONVERSATION_TEXT')await tx.botApodInbox.updateMany({where:{expedienteId:input.expedienteId,status:'PENDING',eventType:'CONVERSATION_TEXT'},data:{notBefore}});
+        if(conversational)await tx.botApodInbox.updateMany({where:{expedienteId:input.expedienteId,status:'PENDING',eventType:{in:['CONVERSATION_TEXT','MEDIA_RECEIVED']}},data:{notBefore}});
         const timestamp=typeof input.payload.timestamp==='number'?new Date(Math.min(input.payload.timestamp*1000,now.getTime())):now;
         const c=await tx.botApodExpediente.findUniqueOrThrow({where:{id:input.expedienteId}});
         const tracking=c.phaseOneStartedAt?{reminderAnchorAt:c.phaseOneStartedAt,nextReminderAt:c.automationPaused||c.phaseOneClosedAt?null:nextFollowUp(c.phaseOneStartedAt,c.lastReminderDay)}:{reminderCount:0,lastReminderDay:0,reminderAnchorAt:now,nextReminderAt:null};

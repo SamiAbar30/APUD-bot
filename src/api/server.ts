@@ -29,6 +29,9 @@ import { addressRoutes } from './address.routes.js';
 import { REPLY_BUTTON_TEXT, type ReplyButtonId } from '../contracts/whatsapp.contract.js';
 import { StrictConversationAgent } from '../core/conversation-agent.js';
 import { brainFromEnv } from '../config/brain.js';
+import { AttachmentIntake, passwordCandidates } from '../core/attachment-intake.js';
+import { CredentialVault } from '../infrastructure/credential-vault.js';
+import { OpenAIVisionReader } from '../adapters/ai/openai-vision.js';
 import { sha256 } from '../adapters/common/http.js';
 import { OpenAICompatibleConversationModel } from '../adapters/ai/openai-compatible-conversation.js';
 import { conversationAiFromEnv } from '../config/conversation-ai.js';
@@ -84,6 +87,17 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
   // Meta and the gateway both reach real phones; only the loopback emulator skips the release check.
   if(env.WHATSAPP_TRANSPORT!=='emulator'&&env.WHATSAPP_ENABLED&&env.OUTBOUND_ENABLED&&referenceAgent.context?.packageHash&&conversationAi.config)await requireAgentEvaluations(env.APOD_AGENT_EVAL_REPORT,referenceAgent.context.packageHash,conversationAi.config.model);
   flow.conversationAgent=conversationAgent;
+  // Files clients send are read by content (PDF, certificate, screenshot…). Downloads take any type
+  // the phone may label a file with; what it really is comes from its bytes.
+  if(executor.wa&&(process.env.ATTACHMENT_INTAKE??'on')!=='off'){
+    const wa=executor.wa;
+    const accepted=['application/pdf','image/jpeg','image/png','image/webp','image/gif','image/heic','image/heif','application/x-pkcs12','application/pkcs12','application/x-pkcs12-certificates','application/octet-stream','application/zip','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','application/vnd.ms-excel','text/html','text/plain'];
+    flow.attachmentIntake=new AttachmentIntake({
+      media:{download:mediaId=>wa.downloadMedia(mediaId,{allowedMimeTypes:accepted})},
+      vault:env.APUD_CREDENTIAL_KEY?new CredentialVault(flow.storage.root,env.APUD_CREDENTIAL_KEY):null,
+      vision:conversationAiEnabled&&conversationAi.status==='CONFIGURED'?new OpenAIVisionReader(conversationAi.config,process.env.VISION_MODEL?.trim()||conversationAi.config.model):null,
+    });
+  }
   const server=Fastify({logger:{level:env.LOG_LEVEL,redact:['req.headers.authorization','req.headers.cookie','body','password','pfx','certificate']},disableRequestLogging:true,bodyLimit:256*1024,requestTimeout:300000,connectionTimeout:30000,trustProxy:false});
   server.setErrorHandler((error,_request,reply)=>{
     const detail=error && typeof error==='object'?error as {code?:string;statusCode?:number}:{};
@@ -216,6 +230,18 @@ export async function createServer(flow:WorkflowService,executor:ActionExecutor,
       const textBytes=m.text?Buffer.from(m.text,'utf8'):undefined;
       const textHash=textBytes?sha256(textBytes):undefined;
       textBytes?.fill(0);
+      // Files are identified and read by the attachment intake in the worker, by their content;
+      // the brain gets a line describing what arrived instead of a generic "adjunto".
+      if(env.CONVERSATION_PHASE===3&&!m.buttonId&&flow.attachmentIntake&&(m.media||m.unreadableMedia)){
+        if(c&&(c.optOutAt||c.automationPaused)&&c.currentState!=='ESCALATED_HUMAN')
+          await flow.db.botApodExpediente.updateMany({where:{id:c.id},data:{optOutAt:null,automationPaused:false}});
+        await debounce.ingestMessage({externalId:m.id,expedienteId:c?.id??null,telefono:m.from,eventType:'MEDIA_RECEIVED',payload:{messageId:m.id,timestamp:m.timestamp,...(m.media?{mediaId:m.media.id,mediaType:m.media.mimeType,...(m.media.filename?{filename:m.media.filename.slice(0,120)}:{})}:{unreadable:m.unreadableMedia??'media'}),...(m.caption?{caption:m.caption.slice(0,1000)}:{})},source:'WHATSAPP'});
+        continue;
+      }
+      // A password is hidden from the chat as before, but kept encrypted so the certificate it
+      // opens can be checked (never shown to any model).
+      if(c&&m.text&&flow.attachmentIntake&&/CONTENIDO_SENSIBLE|REDACTADA/.test(redactConversationPii(m.text)))
+        await flow.attachmentIntake.storePassword(c,passwordCandidates(m.text)).catch(()=>undefined);
       if(env.CONVERSATION_PHASE===3&&!m.buttonId&&(m.text||m.media?.mimeType!=='application/pdf')){
         const text=m.text?redactConversationPii(m.text):/pkcs12/i.test(m.media?.mimeType??'')||/\.(?:p12|pfx)$/i.test(m.media?.filename??'')?'[CONTENIDO_SENSIBLE_OMITIDO]':'El cliente ha enviado un adjunto que requiere revisión de una persona.';
         const stop=/^(?:stop|baja|no me escribas(?: más| mas)?|no quiero seguir|dejad de escribirme|cancelar contacto)[.! ]*$/i.test(text.trim());
