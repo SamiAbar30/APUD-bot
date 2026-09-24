@@ -315,8 +315,11 @@ export class WorkflowService {
           const introduction=sentOpening??await this.db.botApodMessage.findFirst({where:{expedienteId:id,role:'assistant',OR:[{content:'Plantilla aprobada: ASK_HAS_CERT'},{AND:[{content:{contains:'LITIGIOS'}},{content:{contains:'apoderamiento apud acta'}}]}]},select:{id:true}});
           const parts=turnRows.map(x=>String((x.payload as Record<string,unknown>).text??'').trim());
           let text=parts.join('\n');
-          if(parts.some(p=>p==='[CONTENIDO_SENSIBLE_OMITIDO]'))text='[CONTENIDO_SENSIBLE_OMITIDO]';
-          else{const certificate=parts.find(p=>/^\[CERTIFICADO:[A-Z_]+/.test(p));if(certificate)text=certificate;}
+          // A certificate read in this burst already includes any password that came with it (the
+          // pair was checked when the file was read); checking again would find the slots cleared.
+          const certificate=[...parts].reverse().find(p=>/^\[CERTIFICADO:[A-Z_]+/.test(p));
+          if(certificate)text=certificate;
+          else if(parts.some(p=>p==='[CONTENIDO_SENSIBLE_OMITIDO]'))text='[CONTENIDO_SENSIBLE_OMITIDO]';
           // A password that just arrived is checked against the certificate waiting for it.
           if(this.attachmentIntake&&text.trim()==='[CONTENIDO_SENSIBLE_OMITIDO]'){
             const checked=await this.attachmentIntake.checkPair({id:c.id,dni:c.dni});

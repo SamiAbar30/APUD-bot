@@ -265,7 +265,13 @@ export class StrictConversationAgent {
     if(checked)return certificateReply(checked[1]!,checked[2],passwordWasRequested(expediente,history),history);
         // A stop word inside a question ("si lo dejo, ¿me cobráis algo?") is a question, not a stop request.
     const stopWithQuestion=/\?/.test(text)&&!requiresDeterministicHandoff(text.replace(/\b(?:stop|parar|cancelar|no me escribas|no quiero seguir)\b/gi,' '));
-    if(this.brain&&this.phase===3&&(!requiresDeterministicHandoff(text)||stopWithQuestion)&&text!=='[CONTENIDO_SENSIBLE_OMITIDO]'&&!/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(n)){
+    // A line the system wrote about a file ("[Adjunto del cliente: … Cl@ve PIN …]") describes a screen;
+    // the rules for secrets the client types must not read "PIN" or "clave" in it as one (round 12).
+    // Injection wording shown in a screenshot still goes through the deterministic gate.
+    const describesFile=/^\[Adjunto del cliente:/.test(text.trim());
+    const gateText=describesFile?text.replace(/\b(?:cl[a@]ve|pin|contrase\S*|password|c[oó]digos?|sms)\b/gi,'x'):text;
+    const gateNorm=describesFile?gateText.normalize('NFD').replace(/[\u0300-\u036f]/g,'').toLowerCase():n;
+    if(this.brain&&this.phase===3&&(!requiresDeterministicHandoff(gateText)||stopWithQuestion)&&text!=='[CONTENIDO_SENSIBLE_OMITIDO]'&&!/\b(?:sms|codigo de (?:seguridad|verificacion)|pin bancario)\b/.test(gateNorm)){
       const decided=await this.brain.decide(expediente as BrainCase,text,history,memory);
       if(decided)return decided;
     }
