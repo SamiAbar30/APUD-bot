@@ -14,8 +14,9 @@ import {mkdir,writeFile} from 'node:fs/promises';
 import {PrismaClient} from '@prisma/client';
 import {Redis} from 'ioredis';
 import {conversationAiFromEnv} from '../src/config/conversation-ai.js';
+import { demoPhoneNumber } from '../src/demo/demo-fixture.js';
 
-const PHONE=process.env.DEMO_WHATSAPP_RECIPIENTS?.split(',')[0]?.trim()??'34600000000';
+const PHONE=demoPhoneNumber();
 const BASE='http://127.0.0.1:4720';
 const TOKEN=process.env.OPERATOR_TOKEN!;
 const SECRET=process.env.WA_APP_SECRET!;
@@ -122,7 +123,7 @@ const db=new PrismaClient();
 
 async function resetDemo(){
   const c=await db.botApodExpediente.findUniqueOrThrow({where:{telefono:PHONE}});
-  if(c.kmaleonExpedienteId!=='demo-kmaleon-34600000000')throw new Error('NOT_THE_DEMO_CASE');
+  if(c.kmaleonExpedienteId!==`demo-kmaleon-${demoPhoneNumber()}`)throw new Error('NOT_THE_DEMO_CASE');
   await db.$transaction(async tx=>{
     for(const table of ['botApodAccion','botApodInbox','botApodMessage','botApodHumanTask','botApodTrigger','botApodAuditLog','botApodDocumento'] as const)
       await (tx[table] as {deleteMany:(a:unknown)=>Promise<unknown>}).deleteMany({where:{expedienteId:c.id}});

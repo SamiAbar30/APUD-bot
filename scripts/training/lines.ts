@@ -7,11 +7,11 @@ import {createHmac} from 'node:crypto';
 import {PrismaClient} from '@prisma/client';
 import {Redis} from 'ioredis';
 
-export const DEMO_PHONE='34600000000';
+import {demoPhoneNumber} from '../../src/demo/demo-fixture.js';
 export const BASE='http://127.0.0.1:4720';
 
 export function trainingPhones():string[]{
-  return (process.env.DEMO_WHATSAPP_RECIPIENTS??'').split(',').map(p=>p.trim()).filter(p=>p&&p!==DEMO_PHONE);
+  return (process.env.DEMO_WHATSAPP_RECIPIENTS??'').split(',').map(p=>p.trim()).filter(p=>p&&p!==demoPhoneNumber());
 }
 
 /** Half the lines hold a DNI and half an NIE, so both certificate routes get exercised. */
@@ -22,7 +22,7 @@ function identity(phone:string,index:number){
 }
 
 export async function seedTrainingLines(db:PrismaClient){
-  const demo=await db.botApodExpediente.findUniqueOrThrow({where:{telefono:DEMO_PHONE}});
+  const demo=await db.botApodExpediente.findUniqueOrThrow({where:{telefono:demoPhoneNumber()}});
   const lines=[];
   for(const [index,phone] of trainingPhones().entries()){
     const {dni,kind}=identity(phone,index);

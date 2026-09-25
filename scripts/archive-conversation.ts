@@ -9,9 +9,10 @@ import '../src/config/load-env-file.js';
 import {mkdir,writeFile,appendFile} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {PrismaClient} from '@prisma/client';
+import { demoPhoneNumber } from '../src/demo/demo-fixture.js';
 
 const ARCHIVE_DIR='evidence/conversations';
-const phone=process.argv.find(a=>/^\d{6,}$/.test(a))??process.env.DEMO_WHATSAPP_RECIPIENTS?.split(',')[0]?.trim()??'34600000000';
+const phone=process.argv.find(a=>/^\d{6,}$/.test(a))??demoPhoneNumber();
 const label=process.argv.includes('--label')?process.argv[process.argv.indexOf('--label')+1]??'':'';
 
 const db=new PrismaClient();

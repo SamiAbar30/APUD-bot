@@ -7,8 +7,9 @@
 import '../src/config/load-env-file.js';
 import {spawnSync} from 'node:child_process';
 import {PrismaClient} from '@prisma/client';
+import { demoPhoneNumber } from '../src/demo/demo-fixture.js';
 
-const phone=process.env.DEMO_WHATSAPP_RECIPIENTS?.split(',')[0]?.trim()??'34600000000';
+const phone=demoPhoneNumber();
 const label=process.argv.includes('--label')?process.argv[process.argv.indexOf('--label')+1]??'':'';
 
 const archived=spawnSync('npx',['tsx','scripts/archive-conversation.ts',phone,...(label?['--label',label]:[])],{encoding:'utf8',env:process.env});
@@ -18,7 +19,7 @@ console.log((archived.stdout||'').trim());
 const db=new PrismaClient();
 try{
   const c=await db.botApodExpediente.findUniqueOrThrow({where:{telefono:phone}});
-  if(c.kmaleonExpedienteId!=='demo-kmaleon-34600000000')throw new Error('NOT_THE_DEMO_CASE');
+  if(c.kmaleonExpedienteId!==`demo-kmaleon-${demoPhoneNumber()}`)throw new Error('NOT_THE_DEMO_CASE');
   await db.$transaction(async tx=>{
     for(const table of ['botApodAccion','botApodInbox','botApodMessage','botApodHumanTask','botApodTrigger','botApodAuditLog','botApodDocumento'] as const)
       await (tx[table] as {deleteMany:(a:unknown)=>Promise<unknown>}).deleteMany({where:{expedienteId:c.id}});

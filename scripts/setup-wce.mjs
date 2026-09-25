@@ -17,6 +17,8 @@ const required = (key) => {
 };
 const appSecret = previous.WA_APP_SECRET || `wce-${randomBytes(24).toString('hex')}`;
 const verifyToken = previous.WA_VERIFY_TOKEN || `wce-${randomBytes(24).toString('hex')}`;
+// Demo chat phone comes from the local settings only (never committed).
+const demoPhone = process.env.DEMO_PHONE || source.DEMO_PHONE || '34600000000';
 const values = {
   NODE_ENV: 'development', SERVICE_MODE: 'live', DATA_MODE: 'real', HOST: '127.0.0.1', PORT: '4720',
   POSTGRES_PASSWORD: required('POSTGRES_PASSWORD'), DATABASE_URL: required('DATABASE_URL'), REDIS_URL: required('REDIS_URL'),
@@ -24,7 +26,7 @@ const values = {
   MAX_DOCUMENT_BYTES: '15000000', OUTBOUND_ENABLED: 'true', WORKERS_ENABLED: 'true', DEMO_DATA_ENABLED: 'true',
   // The first number is the demo chat the manager sees; the rest are training lines the emulator
   // accepts but never shows on screen.
-  DEMO_WHATSAPP_RECIPIENTS: ['34600000000', ...(source.TRAINING_PHONES || '34600000101,34600000102,34600000103,34600000104,34600000105,34600000106,34600000107,34600000108').split(',').map(p => p.trim()).filter(Boolean)].join(','), WHATSAPP_ENABLED: 'true', WHATSAPP_TRANSPORT: 'emulator',
+  DEMO_PHONE: demoPhone, DEMO_WHATSAPP_RECIPIENTS: [demoPhone, ...(source.TRAINING_PHONES || '34600000101,34600000102,34600000103,34600000104,34600000105,34600000106,34600000107,34600000108').split(',').map(p => p.trim()).filter(Boolean)].join(','), WHATSAPP_ENABLED: 'true', WHATSAPP_TRANSPORT: 'emulator',
   WA_GRAPH_VERSION: 'v23.0', WA_API_BASE_URL: 'http://127.0.0.1:3001/send-to-emulator',
   WA_ACCESS_TOKEN: 'wce-local-access-token', WA_PHONE_NUMBER_ID: '999000000000', WA_BUSINESS_ACCOUNT_ID: 'wce-local-business',
   WA_APP_SECRET: appSecret, WA_VERIFY_TOKEN: verifyToken, WA_TEMPLATE_CONFIG_FILE: '',
@@ -102,4 +104,4 @@ const lines = ['# Generated local-only WCE environment; never use this file for 
 for (const [key, value] of Object.entries(values)) lines.push(`${key}=${value}`);
 await writeFile(targetPath, `${lines.join('\n')}\n`, { mode: 0o600 });
 await chmod(targetPath, 0o600);
-console.log(JSON.stringify({ environmentFile: targetPath, transport: 'emulator', recipient: '34600000000', externalMetaCalls: false, demoMaterialsGenerated, secretsPrinted: false }));
+console.log(JSON.stringify({ environmentFile: targetPath, transport: 'emulator', recipient: 'DEMO_PHONE', externalMetaCalls: false, demoMaterialsGenerated, secretsPrinted: false }));

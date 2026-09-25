@@ -1,12 +1,12 @@
 import './lib/load-env.mjs';
 import { PrismaClient } from '@prisma/client';
 import { loadEnv } from '../src/config/env.js';
-import { DEMO_FIXTURE_SOURCE, DEMO_PHONE_NUMBER, demoFixture } from '../src/demo/demo-fixture.js';
+import { DEMO_FIXTURE_SOURCE, demoPhoneNumber, demoFixture } from '../src/demo/demo-fixture.js';
 
 const env=loadEnv();
 if(!env.DEMO_DATA_ENABLED)throw new Error('DEMO_DATA_DISABLED');
-if(!env.DEMO_WHATSAPP_RECIPIENTS.includes(DEMO_PHONE_NUMBER))throw new Error('DEMO_PHONE_NOT_ALLOWLISTED');
-const fixture=demoFixture(DEMO_PHONE_NUMBER);
+if(!env.DEMO_WHATSAPP_RECIPIENTS.includes(demoPhoneNumber()))throw new Error('DEMO_PHONE_NOT_ALLOWLISTED');
+const fixture=demoFixture(demoPhoneNumber());
 const db=new PrismaClient({log:[]});
 try{
   await db.$connect();

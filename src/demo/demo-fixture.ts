@@ -1,4 +1,7 @@
-export const DEMO_PHONE_NUMBER='34600000000';
+/** Demo chat phone, from the local settings (DEMO_PHONE): real numbers never live in the repo. */
+export function demoPhoneNumber(): string {
+  return process.env.DEMO_PHONE?.trim()||process.env.DEMO_WHATSAPP_RECIPIENTS?.split(',')[0]?.trim()||'34600000000';
+}
 export const DEMO_FIXTURE_SOURCE='DEMO_FIXTURE' as const;
 
 export interface DemoFixture {

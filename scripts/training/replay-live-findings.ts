@@ -36,7 +36,7 @@ async function tap(phone:string,caseId:string,id:string,title:string,contextId?:
 const lines=(await seedTrainingLines(db)).filter(l=>l.document==='DNI');
 const [manager,sami]=[lines[0]!,lines[1]!];
 
-// ---- Manager (34600000999 in the live test) ----
+// ---- Manager (his phone in the live test) ----
 transcript.push('=== Manager ===');
 await clearQueueFor([manager.caseId]);
 const m=await resetLine(db,manager.phone);
@@ -61,7 +61,7 @@ await say(manager.phone,m.caseId,['Dayana ya lo tengo','Pero está en la aplicac
 const ready=await say(manager.phone,m.caseId,['Si si','Ya la tengo','La contraseña','Y todo','Que hago ahora?']);
 check('1+2 not asked again about a computer',!/ordenador[^.]*\?/i.test(ready.join(' ')),ready.join(' ').slice(0,160));
 
-// ---- Sami (34600000000 in the live test) ----
+// ---- Sami (demo phone in the live test) ----
 transcript.push('=== Sami ===');
 await clearQueueFor([sami.caseId]);
 const s=await resetLine(db,sami.phone);

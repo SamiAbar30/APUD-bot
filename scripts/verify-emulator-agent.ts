@@ -8,14 +8,15 @@ import {chromium} from 'playwright';
 import {randomUUID} from 'node:crypto';
 import {writeFile,mkdir} from 'node:fs/promises';
 import assert from 'node:assert/strict';
+import { demoPhoneNumber } from '../src/demo/demo-fixture.js';
 const env=loadEnv();
 assert.equal(env.WHATSAPP_TRANSPORT,'emulator');assert.equal(env.KMALEON_ENABLED,false);assert.equal(env.AI_MODE,'online');assert.equal(env.CONVERSATION_AI_PROVIDER,'openai-compatible');
-assert.ok(env.DEMO_WHATSAPP_RECIPIENTS.includes('34600000000'));
+assert.ok(env.DEMO_WHATSAPP_RECIPIENTS.includes(demoPhoneNumber()));
 const db=new PrismaClient();const browser=await chromium.launch({headless:true});
 const waitFor=async<T>(fn:()=>Promise<T|null|false>,label:string):Promise<T>=>{const until=Date.now()+120000;while(Date.now()<until){const result=await fn();if(result)return result;await new Promise(r=>setTimeout(r,500));}throw new Error('TIMEOUT_'+label);};
 try{
-  const c=await db.botApodExpediente.findUniqueOrThrow({where:{telefono:'34600000000'}});
-  assert.equal(c.kmaleonExpedienteId,'demo-kmaleon-34600000000');assert.equal(c.currentState,'WAITING_CERT_RESPONSE');assert.equal(c.hasDigitalCert,null);assert.equal(c.automationPaused,false);
+  const c=await db.botApodExpediente.findUniqueOrThrow({where:{telefono:demoPhoneNumber()}});
+  assert.equal(c.kmaleonExpedienteId,`demo-kmaleon-${demoPhoneNumber()}`);assert.equal(c.currentState,'WAITING_CERT_RESPONSE');assert.equal(c.hasDigitalCert,null);assert.equal(c.automationPaused,false);
   const page=await browser.newPage({viewport:{width:1000,height:1100}});
   await page.goto('http://127.0.0.1:8080');await page.getByText('🟢 Connected',{exact:true}).waitFor();
   // A fresh first contact already shows the presentation; sending it again makes the chat look resumed.

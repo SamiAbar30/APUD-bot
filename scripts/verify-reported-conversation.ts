@@ -15,10 +15,11 @@ import { allowedConversationOptions, validateModelClassification, type Conversat
 import { rolloutInstruction } from '../src/core/conversation-rollout.js';
 import type { Expediente } from '../src/domain/models/expediente.js';
 import type { WorkflowEvent } from '../src/domain/fsm/states.js';
+import { demoPhoneNumber } from '../src/demo/demo-fixture.js';
 
 const db = new PrismaClient();
 try {
-  const stored = await db.botApodExpediente.findUniqueOrThrow({where:{telefono:'34600000000'}});
+  const stored = await db.botApodExpediente.findUniqueOrThrow({where:{telefono:demoPhoneNumber()}});
   const messages = await db.botApodMessage.findMany({where:{expedienteId:stored.id,role:'user',createdAt:{gte:new Date('2026-09-16T21:49:00Z'),lte:new Date('2026-09-16T21:54:00Z')}},orderBy:[{createdAt:'asc'},{id:'asc'}]});
   assert.equal(messages.length,8,'Original reported conversation must remain intact');
   const config = conversationAiFromEnv();
